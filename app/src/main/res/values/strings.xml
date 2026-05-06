@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Liberta</string>
+    <string name="vpn_notification_channel">Liberta VPN</string>
+</resources>
