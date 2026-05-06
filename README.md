@@ -1,20 +1,20 @@
 # Liberta
 
-Новый Android-only MVP, собранный по `SPEC_DRIVEN.md`.
+Premium Android VPN service based on **sing-box**.
+
+## Project Goal
+Create a high-end, user-friendly, and completely free VPN application for Android that provides seamless access to the open web with stunning visual aesthetics.
 
 ## Что реализовано в MVP
 
-- Kotlin + Jetpack Compose + MVVM shell.
-- `VpnService` foreground lifecycle.
-- Загрузка двух подписок из `SPEC_DRIVEN.md`.
-- VLESS parser, TCP server racing, sing-box config builder.
-- `libbox.aar` integration point через SagerNet `gomobile`.
-- DNS для Android TUN: система получает реальный IP DNS из настроек, sing-box перехватывает DNS через `hijack-dns`, upstream DNS идет через `direct`.
-- Crystal Lens UI: светлый физичный фон, центральная линза включения между заголовком и нижней floating-панелью, отдельный diffraction/dispersion shader для линзы, стеклянный знак питания внутри нее и линзовая поверхность у каждой кнопки.
-- DataStore settings: способ подключения, быстрый auto-refresh interval от 5 минут, DNS, MTU, IPv6, kill switch, proxy, split tunneling, UI comfort, expanded Russian Labs.
-- Phantom Call control-plane: auto-mode создает бесплатную Jitsi-комнату без ручного Bridge URL; пользовательский bridge по-прежнему поддерживается как расширенный путь.
-- Mesh access и режим помощи разделены: кнопка `Меш-сеть` подключает пользователя к mesh-доступу, а благодарность `Вы помогаете людям, спасибо` появляется только при включении себя как relay-узла в Labs.
-- GitHub release workflow: теги `v*` собирают APK и публикуют `liberta.apk` в GitHub Releases.
+- **Kotlin + Jetpack Compose + MVVM shell**: Современная база на Android.
+- **VpnService foreground lifecycle**: Корректная работа в фоне.
+- **Adaptive Living UI**: Интерфейс с шейдерами, параллаксом и визуализацией трафика.
+- **VLESS parser & TCP server racing**: Оптимизация выбора серверов.
+- **libbox.aar integration**: Использование ядра sing-box через SagerNet gomobile.
+- **Phantom Call control-plane**: Мимикрия под WebRTC звонки для обхода блокировок.
+- **Sovereign Mesh**: Возможность работы в качестве relay-узла.
+- **GitHub release workflow**: Автоматическая сборка и публикация APK.
 
 ## Сборка
 
@@ -27,6 +27,6 @@ cd C:\Projects\Liberta
 
 Подробный запуск и проверка: `docs\RUNBOOK.md`.
 
-Debug APK: `app\build\outputs\apk\debug\app-debug.apk`.
-
-Публичная ссылка для QR/share: `https://github.com/lovestove/Liberta`.
+## Документация
+- [SPEC_DRIVEN.md](SPEC_DRIVEN.md) - полная спецификация проекта.
+- [RUNBOOK.md](docs/RUNBOOK.md) - руководство по сборке и запуску.
