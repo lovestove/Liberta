@@ -80,6 +80,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -130,6 +131,7 @@ import java.util.EnumMap
 import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
@@ -310,6 +312,10 @@ fun LibertaApp(
     var surgeKey by remember { mutableStateOf(0) }
     var surgeOrigin by remember { mutableStateOf(Offset.Zero) }
     val surge = remember { Animatable(1f) }
+    var fusionKey by remember { mutableStateOf(0) }
+    var fusionOrigin by remember { mutableStateOf(Offset.Zero) }
+    var fusionTint by remember { mutableStateOf(Azure) }
+    val fusionDrop = remember { Animatable(1f) }
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val view = LocalView.current
@@ -323,6 +329,13 @@ fun LibertaApp(
         if (surgeKey > 0) {
             surge.snapTo(0f)
             surge.animateTo(1f, tween(1_360, easing = FastOutSlowInEasing))
+        }
+    }
+
+    LaunchedEffect(fusionKey) {
+        if (fusionKey > 0) {
+            fusionDrop.snapTo(0f)
+            fusionDrop.animateTo(1f, tween(1_120, easing = FastOutSlowInEasing))
         }
     }
 
@@ -349,6 +362,9 @@ fun LibertaApp(
                 meshEnabled = settings.labs.sovereignRelay,
                 surgeProgress = surge.value,
                 surgeOrigin = surgeOrigin,
+                fusionProgress = fusionDrop.value,
+                fusionOrigin = fusionOrigin,
+                fusionTint = fusionTint,
                 parallax = parallax
             )
 
@@ -369,6 +385,11 @@ fun LibertaApp(
                             }
                         },
                         onConnectionModePower = onConnectionModePower,
+                        onFusionDrop = { origin, method ->
+                            fusionOrigin = origin
+                            fusionTint = method.fusionTint()
+                            fusionKey += 1
+                        },
                         onSettingsChange = onSettingsChange,
                         onLabsChange = onLabsChange,
                         onRecover = onRecover
@@ -406,6 +427,7 @@ private fun HomeScreen(
     onQr: () -> Unit,
     onPower: (Offset) -> Unit,
     onConnectionModePower: (ConnectionMethod) -> Unit,
+    onFusionDrop: (Offset, ConnectionMethod) -> Unit,
     onSettingsChange: ((LibertaSettings) -> LibertaSettings) -> Unit,
     onLabsChange: ((LabSettings) -> LabSettings) -> Unit,
     onRecover: () -> Unit
@@ -462,6 +484,7 @@ private fun HomeScreen(
             onSettingsChange = onSettingsChange,
             onLabsChange = onLabsChange,
             onConnectionModePower = onConnectionModePower,
+            onFusionDrop = onFusionDrop,
             modifier = Modifier.align(Alignment.BottomCenter)
         )
     }
@@ -493,20 +516,28 @@ private fun FloatingTopActions(onSettings: () -> Unit, onQr: () -> Unit, modifie
 @Composable
 private fun HelpGratitudeRibbon(visible: Boolean, modifier: Modifier = Modifier) {
     AnimatedVisibility(visible = visible, modifier = modifier) {
+        val ribbonShape = RoundedCornerShape(999.dp)
         Box(
             Modifier
-                .clip(RoundedCornerShape(999.dp))
+                .shadow(
+                    elevation = 8.dp,
+                    shape = ribbonShape,
+                    clip = false,
+                    ambientColor = Color(0xFF132C3B),
+                    spotColor = Color(0xFF132C3B)
+                )
+                .clip(ribbonShape)
                 .background(
                     Brush.horizontalGradient(
                         listOf(
-                            Color.White.copy(alpha = 0.54f),
-                            Emerald.copy(alpha = 0.20f),
-                            Azure.copy(alpha = 0.16f),
-                            Color.White.copy(alpha = 0.44f)
+                            Color.White.copy(alpha = 0.62f),
+                            Emerald.copy(alpha = 0.26f),
+                            Azure.copy(alpha = 0.22f),
+                            Color.White.copy(alpha = 0.52f)
                         )
                     )
                 )
-                .border(1.dp, Color.White.copy(alpha = 0.76f), RoundedCornerShape(999.dp))
+                .border(1.dp, Color.White.copy(alpha = 0.86f), ribbonShape)
                 .padding(horizontal = 18.dp, vertical = 9.dp),
             contentAlignment = Alignment.Center
         ) {
@@ -537,6 +568,17 @@ private fun PowerLens(status: VpnStatus, modifier: Modifier, onPower: (Offset) -
         animationSpec = infiniteRepeatable(tween(5_600), RepeatMode.Restart),
         label = "lensFlow"
     )
+    val flowSpeed by animateFloatAsState(
+        targetValue = when (status.phase) {
+            ConnectionPhase.RACING -> 3.4f
+            ConnectionPhase.CONNECTING -> 2.6f
+            ConnectionPhase.RECOVERING -> 2.0f
+            ConnectionPhase.REFRESHING -> 1.5f
+            else -> 1.0f
+        },
+        animationSpec = tween(900, easing = FastOutSlowInEasing),
+        label = "lensFlowSpeed"
+    )
     val scale by animateFloatAsState(
         targetValue = if (status.isConnected) 1.025f else 0.99f,
         animationSpec = spring(dampingRatio = 0.68f, stiffness = 130f),
@@ -561,25 +603,29 @@ private fun PowerLens(status: VpnStatus, modifier: Modifier, onPower: (Offset) -
             val radius = size.minDimension * 0.38f * scale
             val active = status.isConnected || status.isBusy
             val accent = status.accent()
+            val acceleratedFlow = flow * flowSpeed
+            val busyPulseBoost = when (status.phase) {
+                ConnectionPhase.RACING -> 0.55f + 0.30f * sin(flow * 6.28f * 1.7f)
+                ConnectionPhase.CONNECTING -> 0.50f + 0.24f * sin(flow * 6.28f * 1.3f)
+                ConnectionPhase.RECOVERING -> 0.40f + 0.18f * sin(flow * 6.28f)
+                else -> 0f
+            }
+            val effectivePulse = max(status.trafficPulse, busyPulseBoost).coerceIn(0f, 1f)
 
-            drawRefractionCaustics(center, radius, flow, active, status.trafficPulse)
-            drawLensFieldArcs(center, radius, flow, active, status.trafficPulse, accent)
+            drawGroundShadow(center, radius)
+            drawOuterHalo(center, radius, accent, active, effectivePulse, breathe)
+            drawSphereBody(center, radius, active, effectivePulse, accent)
+            drawRefractionCaustics(center, radius, acceleratedFlow, active, effectivePulse)
+            drawLensFieldArcs(center, radius, acceleratedFlow, active, effectivePulse, accent)
+            drawSphereBottomShadow(center, radius)
+            drawSphereSpecularHighlight(center, radius)
+            drawFresnelRim(center, radius, active, effectivePulse)
+            drawDispersionRing(center, radius, acceleratedFlow, active)
             drawCircle(
-                color = Color.White.copy(alpha = 0.56f),
-                radius = radius * 1.005f,
+                color = Gold.copy(alpha = 0.34f + status.trafficPulse * 0.20f),
+                radius = radius * (0.94f + breathe * 0.04f),
                 center = center,
-                style = Stroke(width = 1.4.dp.toPx())
-            )
-            drawCircle(
-                color = Gold.copy(alpha = 0.30f + status.trafficPulse * 0.18f),
-                radius = radius * (0.91f + breathe * 0.04f),
-                center = center,
-                style = Stroke(width = (1.1.dp + 2.dp * status.trafficPulse).toPx(), cap = StrokeCap.Round)
-            )
-            drawCircle(
-                color = Color.White.copy(alpha = 0.34f),
-                radius = radius * 0.18f,
-                center = Offset(center.x - radius * 0.30f, center.y - radius * 0.36f)
+                style = Stroke(width = (1.4.dp + 2.dp * status.trafficPulse).toPx(), cap = StrokeCap.Round)
             )
             with(DiffractionLensShader) {
                 drawPowerGlyph(center, radius * 0.27f, flow * 6.28f, active, status.trafficPulse)
@@ -638,6 +684,225 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawRefractionCaust
     }
 }
 
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGroundShadow(center: Offset, radius: Float) {
+    val shadowCenter = Offset(center.x + radius * 0.05f, center.y + radius * 0.62f)
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color(0xFF132C3B).copy(alpha = 0.16f),
+                Color(0xFF132C3B).copy(alpha = 0.06f),
+                Color.Transparent
+            ),
+            center = shadowCenter,
+            radius = radius * 1.30f
+        ),
+        radius = radius * 1.30f,
+        center = shadowCenter
+    )
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawOuterHalo(
+    center: Offset,
+    radius: Float,
+    accent: Color,
+    active: Boolean,
+    traffic: Float,
+    breathe: Float
+) {
+    val haloAlpha = if (active) 0.32f + traffic * 0.22f else 0.16f + breathe * 0.06f
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                accent.copy(alpha = haloAlpha),
+                accent.copy(alpha = haloAlpha * 0.4f),
+                Color.Transparent
+            ),
+            center = center,
+            radius = radius * 1.78f
+        ),
+        radius = radius * 1.78f,
+        center = center
+    )
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.38f),
+                Color.White.copy(alpha = 0.10f),
+                Color.Transparent
+            ),
+            center = center,
+            radius = radius * 1.36f
+        ),
+        radius = radius * 1.36f,
+        center = center
+    )
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSphereBody(
+    center: Offset,
+    radius: Float,
+    active: Boolean,
+    traffic: Float,
+    accent: Color
+) {
+    val highlightCenter = Offset(center.x - radius * 0.30f, center.y - radius * 0.36f)
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color(0xFFF7FCFF).copy(alpha = 0.96f),
+                Color(0xFFE0EEF7).copy(alpha = 0.86f),
+                Color(0xFFB6CFE0).copy(alpha = 0.74f),
+                Color(0xFF6E8FA6).copy(alpha = 0.62f),
+                Color(0xFF3F5C77).copy(alpha = 0.48f)
+            ),
+            stops = listOf(0f, 0.30f, 0.60f, 0.86f, 1f),
+            center = highlightCenter,
+            radius = radius * 1.08f
+        ),
+        radius = radius,
+        center = center
+    )
+    if (active) {
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    accent.copy(alpha = 0.20f + traffic * 0.16f),
+                    accent.copy(alpha = 0.10f),
+                    Color.Transparent
+                ),
+                center = center,
+                radius = radius * 0.96f
+            ),
+            radius = radius,
+            center = center
+        )
+    }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSphereBottomShadow(center: Offset, radius: Float) {
+    val shadowCenter = Offset(center.x + radius * 0.32f, center.y + radius * 0.40f)
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color(0xFF0E2334).copy(alpha = 0.32f),
+                Color(0xFF1F3A52).copy(alpha = 0.16f),
+                Color.Transparent
+            ),
+            center = shadowCenter,
+            radius = radius * 0.94f
+        ),
+        radius = radius,
+        center = center
+    )
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSphereSpecularHighlight(center: Offset, radius: Float) {
+    val hp = Offset(center.x - radius * 0.34f, center.y - radius * 0.46f)
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.92f),
+                Color.White.copy(alpha = 0.36f),
+                Color.Transparent
+            ),
+            center = hp,
+            radius = radius * 0.34f
+        ),
+        radius = radius * 0.34f,
+        center = hp
+    )
+    drawCircle(
+        color = Color.White.copy(alpha = 0.95f),
+        radius = radius * 0.055f,
+        center = Offset(center.x - radius * 0.42f, center.y - radius * 0.52f)
+    )
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.36f),
+                Color.Transparent
+            ),
+            center = Offset(center.x + radius * 0.18f, center.y - radius * 0.04f),
+            radius = radius * 0.18f
+        ),
+        radius = radius * 0.18f,
+        center = Offset(center.x + radius * 0.18f, center.y - radius * 0.04f)
+    )
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFresnelRim(
+    center: Offset,
+    radius: Float,
+    active: Boolean,
+    traffic: Float
+) {
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color.Transparent,
+                Color.Transparent,
+                Color.White.copy(alpha = 0.62f + traffic * 0.18f),
+                Color.White.copy(alpha = 0.10f)
+            ),
+            stops = listOf(0f, 0.84f, 0.96f, 1f),
+            center = center,
+            radius = radius
+        ),
+        radius = radius,
+        center = center
+    )
+    drawCircle(
+        color = Color.White.copy(alpha = if (active) 0.88f else 0.66f),
+        radius = radius,
+        center = center,
+        style = Stroke(width = 1.2.dp.toPx())
+    )
+    drawCircle(
+        color = Color(0xFF132C3B).copy(alpha = 0.22f),
+        radius = radius * 0.985f,
+        center = center,
+        style = Stroke(width = 0.6.dp.toPx())
+    )
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawDispersionRing(
+    center: Offset,
+    radius: Float,
+    phase: Float,
+    active: Boolean
+) {
+    val baseAlpha = if (active) 0.52f else 0.34f
+    val colors = listOf(
+        Color(0xFF77B8FF),
+        Color(0xFFA9F1FF),
+        Color(0xFFFFFFFF),
+        Color(0xFFFFE6A6),
+        Color(0xFF5FE2B3)
+    )
+    colors.forEachIndexed { index, color ->
+        val ringR = radius * (0.882f + index * 0.018f)
+        drawCircle(
+            color = color.copy(alpha = baseAlpha * (1f - index * 0.12f)),
+            radius = ringR,
+            center = center,
+            style = Stroke(width = (0.7f + index * 0.05f).dp.toPx(), cap = StrokeCap.Round)
+        )
+    }
+    repeat(7) { index ->
+        val angle = (phase * 360f + index * 51.4f) * (PI.toFloat() / 180f)
+        val ringR = radius * 0.985f
+        val tip = Offset(
+            center.x + cos(angle) * ringR,
+            center.y + sin(angle) * ringR
+        )
+        drawCircle(
+            color = Color.White.copy(alpha = 0.85f),
+            radius = (1.6f + sin(phase * 6.28f + index) * 0.6f).dp.toPx().coerceAtLeast(0.8f),
+            center = tip
+        )
+    }
+}
+
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLensFieldArcs(
     center: Offset,
     radius: Float,
@@ -685,6 +950,7 @@ private fun FloatingControlDock(
     onSettingsChange: ((LibertaSettings) -> LibertaSettings) -> Unit,
     onLabsChange: ((LabSettings) -> LabSettings) -> Unit,
     onConnectionModePower: (ConnectionMethod) -> Unit,
+    onFusionDrop: (Offset, ConnectionMethod) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var infoMode by rememberSaveable { mutableStateOf<ConnectionMode?>(null) }
@@ -712,7 +978,10 @@ private fun FloatingControlDock(
                     title = mode.title,
                     selected = selectedMode == mode,
                     enabled = !status.isBusy && !status.isConnected,
-                    onClick = {
+                    onClick = { origin ->
+                        if (selectedMode != mode) {
+                            onFusionDrop(origin, mode.method)
+                        }
                         onSettingsChange { current ->
                             current.copy(
                                 connectionMethod = mode.method,
@@ -750,7 +1019,7 @@ private fun DockButton(
     title: String,
     selected: Boolean,
     enabled: Boolean,
-    onClick: () -> Unit,
+    onClick: (Offset) -> Unit,
     onInfo: () -> Unit
 ) {
     val infinite = rememberInfiniteTransition(label = "dockLens")
@@ -775,6 +1044,8 @@ private fun DockButton(
         animationSpec = spring(dampingRatio = 0.7f, stiffness = 400f),
         label = "dockScale"
     )
+    var rootCenter by remember { mutableStateOf(Offset.Zero) }
+    val dockShape = RoundedCornerShape(22.dp)
 
     Box(
         Modifier
@@ -784,7 +1055,21 @@ private fun DockButton(
                 scaleX = scale
                 scaleY = scale
             }
-            .clip(RoundedCornerShape(22.dp))
+            .shadow(
+                elevation = 6.dp,
+                shape = dockShape,
+                clip = false,
+                ambientColor = Color(0xFF132C3B),
+                spotColor = Color(0xFF132C3B)
+            )
+            .clip(dockShape)
+            .onGloballyPositioned { coords ->
+                val topLeft = coords.localToRoot(Offset.Zero)
+                rootCenter = Offset(
+                    topLeft.x + coords.size.width / 2f,
+                    topLeft.y + coords.size.height / 2f
+                )
+            }
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
                 awaitPointerEventScope {
@@ -806,7 +1091,7 @@ private fun DockButton(
                 indication = null,
                 onClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                    onClick()
+                    onClick(rootCenter)
                 }
             )
             .alpha(alpha)
@@ -881,98 +1166,157 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLensButtonSurfa
     magnetSpot: Offset? = null
 ) {
     val active = selected && enabled
+    val cornerR = CornerRadius(cornerRadiusPx, cornerRadiusPx)
     val magneticCenter = magnetSpot?.let {
         Offset(
             it.x.coerceIn(size.width * 0.08f, size.width * 0.92f),
             it.y.coerceIn(size.height * 0.12f, size.height * 0.88f)
         )
     }
-    val center = Offset(
-        size.width * (0.46f + sin(phase * 6.28f) * 0.035f + press * 0.10f),
-        size.height * (0.48f - press * 0.08f)
-    ).let { animated -> magneticCenter?.let { animated + (it - animated) * (0.30f + press * 0.28f) } ?: animated }
-    val radius = size.maxDimension * 0.94f
+    val highlightCenter = magneticCenter?.let { it + Offset(-size.width * 0.06f, -size.height * 0.18f) }
+        ?: Offset(size.width * 0.28f, size.height * 0.18f)
+
+    drawRoundRect(
+        brush = Brush.linearGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.62f + press * 0.18f),
+                Color.White.copy(alpha = 0.42f + press * 0.10f),
+                Color(0xFFE6F1FA).copy(alpha = 0.34f),
+                Color(0xFFC9DCEC).copy(alpha = 0.30f)
+            ),
+            start = Offset(size.width * 0.1f, 0f),
+            end = Offset(size.width * 0.9f, size.height)
+        ),
+        cornerRadius = cornerR
+    )
     drawRoundRect(
         brush = Brush.radialGradient(
             colors = listOf(
-                Color.White.copy(alpha = if (active) 0.30f + press * 0.16f else 0.16f + press * 0.10f),
-                Azure.copy(alpha = if (active) 0.11f + press * 0.08f else 0.040f + press * 0.045f),
-                Emerald.copy(alpha = if (active) 0.08f + press * 0.08f else 0.028f + press * 0.040f),
-                Color.White.copy(alpha = 0.035f)
+                Color.White.copy(alpha = 0.66f + press * 0.18f),
+                Color.White.copy(alpha = 0.20f),
+                Color.Transparent
             ),
-            center = magneticCenter?.let { it + Offset(-size.width * 0.06f, -size.height * 0.18f) }
-                ?: Offset(size.width * 0.28f, size.height * 0.18f),
-            radius = radius
+            center = highlightCenter,
+            radius = size.maxDimension * 0.86f
         ),
-        cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx)
+        cornerRadius = cornerR
     )
     drawRoundRect(
-        brush = Brush.linearGradient(
-            listOf(
-                Color.White.copy(alpha = 0.20f + press * 0.18f),
-                Color.White.copy(alpha = 0.025f),
-                Gold.copy(alpha = if (active) 0.12f else 0.035f)
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.55f + press * 0.18f),
+                Color.White.copy(alpha = 0.16f),
+                Color.Transparent
             ),
-            start = Offset.Zero,
-            end = Offset(size.width, size.height)
+            startY = 0f,
+            endY = size.height * 0.55f
         ),
-        cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx)
+        topLeft = Offset.Zero,
+        size = Size(size.width, size.height * 0.55f),
+        cornerRadius = cornerR
     )
+    drawRoundRect(
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                Color.Transparent,
+                Color(0xFF14283A).copy(alpha = 0.10f)
+            ),
+            startY = size.height * 0.55f,
+            endY = size.height
+        ),
+        topLeft = Offset(0f, size.height * 0.55f),
+        size = Size(size.width, size.height * 0.45f),
+        cornerRadius = CornerRadius(cornerRadiusPx * 0.6f, cornerRadiusPx * 0.6f)
+    )
+    if (active) {
+        drawRoundRect(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Azure.copy(alpha = 0.22f + press * 0.10f),
+                    Azure.copy(alpha = 0.06f),
+                    Color.Transparent
+                ),
+                center = Offset(size.width * 0.5f, size.height * 0.5f),
+                radius = size.maxDimension * 0.78f
+            ),
+            cornerRadius = cornerR
+        )
+    }
     magneticCenter?.let { spot ->
         drawCircle(
             brush = Brush.radialGradient(
                 listOf(
-                    Color.White.copy(alpha = 0.30f * press),
-                    Azure.copy(alpha = 0.13f * press),
+                    Color.White.copy(alpha = 0.42f * press),
+                    Azure.copy(alpha = 0.18f * press),
                     Color.Transparent
                 ),
                 center = spot,
-                radius = size.minDimension * 1.15f
+                radius = size.minDimension * 1.05f
             ),
-            radius = size.minDimension * 1.15f,
+            radius = size.minDimension * 1.05f,
             center = spot
         )
     }
-    repeat(5) { index ->
-        val y = size.height * (0.18f + index * 0.17f + sin(phase * 6.28f + index) * 0.025f)
-        val pullX = magneticCenter?.let { (it.x - size.width / 2f) * 0.14f } ?: 0f
-        val pullY = magneticCenter?.let { (it.y - size.height / 2f) * 0.05f } ?: 0f
+    repeat(4) { index ->
+        val y = size.height * (0.22f + index * 0.20f + sin(phase * 6.28f + index) * 0.022f)
+        val pullX = magneticCenter?.let { (it.x - size.width / 2f) * 0.12f } ?: 0f
+        val pullY = magneticCenter?.let { (it.y - size.height / 2f) * 0.04f } ?: 0f
         val path = Path().apply {
-            moveTo(size.width * -0.08f, y + pullY)
+            moveTo(size.width * -0.06f, y + pullY)
             cubicTo(
-                size.width * (0.24f + phase * 0.08f) + pullX,
-                y - size.height * (0.18f + press * 0.05f),
-                size.width * (0.58f - phase * 0.05f) + pullX * 1.5f,
-                y + size.height * (0.18f + press * 0.05f),
-                size.width * 1.08f,
-                y - size.height * 0.04f
+                size.width * (0.26f + phase * 0.06f) + pullX,
+                y - size.height * (0.14f + press * 0.04f),
+                size.width * (0.62f - phase * 0.05f) + pullX * 1.4f,
+                y + size.height * (0.14f + press * 0.04f),
+                size.width * 1.06f,
+                y - size.height * 0.03f
             )
         }
         drawPath(
             path = path,
-            color = listOf(Azure, Emerald, Gold)[index % 3].copy(alpha = (if (active) 0.18f else 0.08f) + press * 0.08f),
-            style = Stroke(width = (0.75f + index * 0.08f + press * 0.60f).dp.toPx(), cap = StrokeCap.Round)
+            color = listOf(Azure, Emerald, Gold)[index % 3].copy(
+                alpha = (if (active) 0.22f else 0.10f) + press * 0.10f
+            ),
+            style = Stroke(width = (0.7f + index * 0.07f + press * 0.55f).dp.toPx(), cap = StrokeCap.Round)
         )
     }
-    repeat(3) { index ->
-        drawCircle(
-            color = listOf(Azure, Gold, Emerald)[index].copy(alpha = if (active) 0.18f else 0.08f),
-            radius = size.minDimension * (0.50f + index * 0.10f),
-            center = center + Offset(index * 9.dp.toPx(), -index * 3.dp.toPx()),
-            style = Stroke(width = (0.8f + index * 0.22f).dp.toPx(), cap = StrokeCap.Round)
-        )
-    }
-    drawRoundRect(
-        color = Color.White.copy(alpha = if (active) 0.78f else 0.46f),
-        cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx),
-        style = Stroke(width = 1.dp.toPx())
+    drawCircle(
+        color = Color.White.copy(alpha = 0.85f + press * 0.10f),
+        radius = (1.6f + size.minDimension * 0.012f).coerceAtMost(size.minDimension * 0.04f),
+        center = Offset(size.width * 0.18f, size.height * 0.22f)
+    )
+    drawArc(
+        brush = Brush.linearGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.85f),
+                Color(0xFF77B8FF).copy(alpha = 0.72f),
+                Color.White.copy(alpha = 0.92f),
+                Color(0xFFFFD86F).copy(alpha = 0.70f),
+                Color.White.copy(alpha = 0.85f)
+            ),
+            start = Offset.Zero,
+            end = Offset(size.width, size.height)
+        ),
+        startAngle = 0f,
+        sweepAngle = 360f,
+        useCenter = false,
+        topLeft = Offset(0.6.dp.toPx(), 0.6.dp.toPx()),
+        size = Size(size.width - 1.2.dp.toPx(), size.height - 1.2.dp.toPx()),
+        style = Stroke(width = 1.4.dp.toPx())
     )
     drawRoundRect(
-        color = Azure.copy(alpha = if (active) 0.18f else 0.08f),
-        topLeft = Offset(1.5.dp.toPx(), 1.5.dp.toPx()),
-        size = Size(size.width - 3.dp.toPx(), size.height - 3.dp.toPx()),
+        color = Color.White.copy(alpha = if (active) 0.55f else 0.34f),
+        topLeft = Offset(2.dp.toPx(), 2.dp.toPx()),
+        size = Size(size.width - 4.dp.toPx(), size.height - 4.dp.toPx()),
         cornerRadius = CornerRadius(cornerRadiusPx * 0.86f, cornerRadiusPx * 0.86f),
-        style = Stroke(width = 0.8.dp.toPx())
+        style = Stroke(width = 0.6.dp.toPx())
+    )
+    drawRoundRect(
+        color = Color(0xFF132C3B).copy(alpha = 0.18f),
+        topLeft = Offset(0.4.dp.toPx(), 0.4.dp.toPx()),
+        size = Size(size.width - 0.8.dp.toPx(), size.height - 0.8.dp.toPx()),
+        cornerRadius = cornerR,
+        style = Stroke(width = 0.5.dp.toPx())
     )
 }
 
@@ -983,32 +1327,108 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLensCircleSurfa
 ) {
     val active = selected && enabled
     val center = Offset(size.width / 2f, size.height / 2f)
-    val radius = size.minDimension / 2f
+    val radius = size.minDimension / 2f - 0.6.dp.toPx()
+    val highlightCenter = Offset(center.x - radius * 0.30f, center.y - radius * 0.36f)
+
     drawCircle(
         brush = Brush.radialGradient(
-            listOf(
-                Color.White.copy(alpha = if (active) 0.44f else 0.25f),
-                Azure.copy(alpha = if (active) 0.18f else 0.065f),
-                Color.White.copy(alpha = 0.035f)
+            colors = listOf(
+                Color(0xFFF7FCFF).copy(alpha = if (active) 0.92f else 0.78f),
+                Color(0xFFE0EEF7).copy(alpha = if (active) 0.78f else 0.62f),
+                Color(0xFFB0CADC).copy(alpha = 0.62f),
+                Color(0xFF6E8FA6).copy(alpha = 0.50f)
             ),
-            center = Offset(center.x - radius * 0.28f, center.y - radius * 0.34f),
-            radius = radius * 1.5f
+            stops = listOf(0f, 0.40f, 0.78f, 1f),
+            center = highlightCenter,
+            radius = radius * 1.10f
         ),
         radius = radius,
         center = center
     )
-    drawCircle(Color.White.copy(alpha = 0.52f), radius = radius * 0.96f, center = center, style = Stroke(width = 1.dp.toPx()))
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color(0xFF0E2334).copy(alpha = 0.30f),
+                Color(0xFF1F3A52).copy(alpha = 0.12f),
+                Color.Transparent
+            ),
+            center = Offset(center.x + radius * 0.28f, center.y + radius * 0.36f),
+            radius = radius * 0.92f
+        ),
+        radius = radius,
+        center = center
+    )
+    if (active) {
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Azure.copy(alpha = 0.24f),
+                    Azure.copy(alpha = 0.08f),
+                    Color.Transparent
+                ),
+                center = center,
+                radius = radius * 0.92f
+            ),
+            radius = radius,
+            center = center
+        )
+    }
     repeat(3) { index ->
         drawArc(
-            color = listOf(Azure, Gold, Emerald)[index].copy(alpha = if (active) 0.22f else 0.10f),
+            color = listOf(Azure, Gold, Emerald)[index].copy(alpha = if (active) 0.34f else 0.16f),
             startAngle = phase * 360f + index * 94f,
             sweepAngle = 40f,
             useCenter = false,
-            topLeft = Offset(center.x - radius * 0.82f, center.y - radius * 0.82f),
-            size = Size(radius * 1.64f, radius * 1.64f),
+            topLeft = Offset(center.x - radius * 0.84f, center.y - radius * 0.84f),
+            size = Size(radius * 1.68f, radius * 1.68f),
             style = Stroke(width = 1.dp.toPx(), cap = StrokeCap.Round)
         )
     }
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.85f),
+                Color.White.copy(alpha = 0.30f),
+                Color.Transparent
+            ),
+            center = Offset(center.x - radius * 0.36f, center.y - radius * 0.46f),
+            radius = radius * 0.36f
+        ),
+        radius = radius * 0.36f,
+        center = Offset(center.x - radius * 0.36f, center.y - radius * 0.46f)
+    )
+    drawCircle(
+        color = Color.White.copy(alpha = 0.95f),
+        radius = (radius * 0.06f).coerceAtMost(2.4.dp.toPx()),
+        center = Offset(center.x - radius * 0.44f, center.y - radius * 0.50f)
+    )
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color.Transparent,
+                Color.Transparent,
+                Color.White.copy(alpha = if (active) 0.78f else 0.56f),
+                Color.White.copy(alpha = 0.10f)
+            ),
+            stops = listOf(0f, 0.84f, 0.96f, 1f),
+            center = center,
+            radius = radius
+        ),
+        radius = radius,
+        center = center
+    )
+    drawCircle(
+        color = Color.White.copy(alpha = if (active) 0.92f else 0.72f),
+        radius = radius,
+        center = center,
+        style = Stroke(width = 1.1.dp.toPx())
+    )
+    drawCircle(
+        color = Color(0xFF132C3B).copy(alpha = 0.22f),
+        radius = radius * 0.985f,
+        center = center,
+        style = Stroke(width = 0.5.dp.toPx())
+    )
 }
 
 private enum class ConnectionMode(
@@ -1044,6 +1464,14 @@ private fun LibertaSettings.connectionMode(): ConnectionMode =
         ConnectionMethod.WHITELISTS -> ConnectionMode.WHITELISTS
         ConnectionMethod.PHANTOM_CALL -> ConnectionMode.PHANTOM_CALL
         ConnectionMethod.MESH_ACCESS -> ConnectionMode.MESH
+    }
+
+private fun ConnectionMethod.fusionTint(): Color =
+    when (this) {
+        ConnectionMethod.BLACKLISTS -> Azure
+        ConnectionMethod.WHITELISTS -> Gold
+        ConnectionMethod.PHANTOM_CALL -> Rose
+        ConnectionMethod.MESH_ACCESS -> Emerald
     }
 
 @Composable
@@ -1326,6 +1754,9 @@ private fun LivingBackground(
     meshEnabled: Boolean,
     surgeProgress: Float,
     surgeOrigin: Offset,
+    fusionProgress: Float,
+    fusionOrigin: Offset,
+    fusionTint: Color,
     parallax: Offset
 ) {
     val infinite = rememberInfiniteTransition(label = "livingBackground")
@@ -1499,6 +1930,38 @@ private fun LivingBackground(
                     style = Stroke(width = (12 - index * 2).dp.toPx(), cap = StrokeCap.Round)
                 )
             }
+        }
+
+        if (fusionProgress < 1f) {
+            val origin = if (fusionOrigin == Offset.Zero) Offset(size.width / 2f, size.height * 0.86f) else fusionOrigin
+            val maxRadius = size.maxDimension * 1.18f
+            val curRadius = maxRadius * fusionProgress
+            val fade = (1f - fusionProgress).coerceAtLeast(0f)
+            drawCircle(
+                brush = Brush.radialGradient(
+                    listOf(
+                        fusionTint.copy(alpha = 0.32f * fade),
+                        fusionTint.copy(alpha = 0.16f * fade),
+                        Color.Transparent
+                    ),
+                    center = origin,
+                    radius = curRadius
+                ),
+                radius = curRadius,
+                center = origin
+            )
+            drawCircle(
+                color = fusionTint.copy(alpha = 0.30f * fade),
+                radius = curRadius * 0.92f,
+                center = origin,
+                style = Stroke(width = (4.dp.toPx() * (1f - fusionProgress * 0.55f)).coerceAtLeast(0.6f), cap = StrokeCap.Round)
+            )
+            drawCircle(
+                color = Color.White.copy(alpha = 0.22f * fade),
+                radius = curRadius * 0.68f,
+                center = origin,
+                style = Stroke(width = 1.4.dp.toPx(), cap = StrokeCap.Round)
+            )
         }
     }
 }
@@ -1860,6 +2323,13 @@ private fun GlassIconButton(onClick: () -> Unit, content: @Composable () -> Unit
     Box(
         Modifier
             .size(48.dp)
+            .shadow(
+                elevation = 10.dp,
+                shape = CircleShape,
+                clip = false,
+                ambientColor = Color(0xFF132C3B),
+                spotColor = Color(0xFF132C3B)
+            )
             .clip(CircleShape)
             .clickable {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1883,20 +2353,27 @@ private fun GlassPanel(modifier: Modifier = Modifier, content: @Composable () ->
         animationSpec = infiniteRepeatable(tween(7_200), RepeatMode.Restart),
         label = "panelLensPhase"
     )
+    val panelShape = RoundedCornerShape(28.dp)
     Box(
         modifier
-            .clip(RoundedCornerShape(28.dp))
+            .shadow(
+                elevation = 18.dp,
+                shape = panelShape,
+                clip = false,
+                ambientColor = Color(0xFF132C3B),
+                spotColor = Color(0xFF132C3B)
+            )
+            .clip(panelShape)
             .background(
                 Brush.linearGradient(
                     listOf(
-                        Color.White.copy(alpha = 0.76f),
+                        Color.White.copy(alpha = 0.78f),
                         Glass,
-                        Azure.copy(alpha = 0.08f),
-                        Color.White.copy(alpha = 0.46f)
+                        Azure.copy(alpha = 0.10f),
+                        Color.White.copy(alpha = 0.50f)
                     )
                 )
             )
-            .border(1.dp, Color.White.copy(alpha = 0.86f), RoundedCornerShape(28.dp))
     ) {
         Canvas(Modifier.matchParentSize()) {
             drawLensButtonSurface(
