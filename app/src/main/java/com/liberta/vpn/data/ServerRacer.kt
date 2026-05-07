@@ -26,7 +26,10 @@ class ServerRacer(
             }
         }.awaitAll()
 
-        val successful = tested.filter { it.latencyMs != null }.sortedBy { it.latencyMs }
+        val successful = tested.filter { it.latencyMs != null }.sortedWith(
+            compareBy<ServerCandidate> { if (it.port == 443) 0 else 1 }
+                .thenBy { it.latencyMs }
+        )
         RacingResult(
             selected = successful.firstOrNull(),
             tested = tested,

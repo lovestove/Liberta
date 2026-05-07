@@ -1,5 +1,6 @@
 package com.liberta.vpn.core
 
+import com.liberta.vpn.data.ConnectionProfile
 import com.liberta.vpn.data.LibertaSettings
 import com.liberta.vpn.data.ServerCandidate
 
@@ -7,8 +8,11 @@ class SingBoxConfigBuilder {
     fun build(selected: ServerCandidate, settings: LibertaSettings): String {
         val dnsServer = effectiveDnsServer(settings)
         val mtu = effectiveMtu(settings)
+        val profile = settings.profile
+        val isWhitelists = profile == ConnectionProfile.WHITELISTS
+        
         val inbounds = buildList {
-            add(tunInbound(mtu, settings.ipv6Enabled, settings.killSwitch))
+            add(tunInbound(mtu, settings.ipv6Enabled))
             if (settings.proxyEnabled) {
                 add(
                     """
@@ -22,15 +26,18 @@ class SingBoxConfigBuilder {
                 )
             }
         }.joinToString(",\n")
+        
+        val routeRules = buildRouteRules(isWhitelists, settings.labs.phantomCall)
 
         return """
             {
               "log": { "level": "info", "timestamp": true },
               "dns": {
                 "servers": [
-                  { "tag": "primary", "address": "${escape(dnsServer)}", "strategy": "prefer_ipv4", "detour": "direct" }
+                  ${dnsServer.remoteJson()},
+                  { "tag": "dns-direct", "address": "8.8.8.8", "detour": "direct", "strategy": "ipv4_only" }
                 ],
-                "final": "primary"
+                "final": "dns-remote"
               },
               "inbounds": [
                 $inbounds
@@ -42,30 +49,53 @@ class SingBoxConfigBuilder {
               ],
               "route": {
                 "rules": [
-                  { "inbound": "tun-in", "protocol": "dns", "action": "hijack-dns" }
+                  $routeRules
                 ],
-                "auto_detect_interface": true,
+                "auto_detect_interface": false,
                 "final": "proxy"
               }
             }
         """.trimIndent()
     }
-
-    private fun tunInbound(mtu: Int, ipv6Enabled: Boolean, killSwitch: Boolean): String {
-        val addresses = if (ipv6Enabled) {
-            "\"172.19.0.1/30\", \"fdfe:dcba:9876::1/126\""
+    
+    private fun buildRouteRules(isWhitelists: Boolean, phantomCall: Boolean): String {
+        val rules = mutableListOf<String>()
+        rules.add("{ \"ip_cidr\": \"172.19.0.2/32\", \"port\": 53, \"action\": \"hijack-dns\" }")
+        rules.add("{ \"protocol\": \"dns\", \"action\": \"hijack-dns\" }")
+        
+        // Исключаем SIP/RTP для звонков (Phantom Call)
+        if (phantomCall) {
+            rules.add("{ \"network\": \"udp\", \"port\": [5060, 5061], \"action\": \"route\", \"outbound\": \"direct\" }")
+            rules.add("{ \"network\": \"udp\", \"port_range\": \"10000:20000\", \"action\": \"route\", \"outbound\": \"direct\" }")
+            rules.add("{ \"network\": \"tcp\", \"port\": [5060, 5061], \"action\": \"route\", \"outbound\": \"direct\" }")
+        }
+        
+        if (isWhitelists) {
+            // Белые списки: российские сайты идут напрямую, остальное через VPN
+            rules.add("{ \"domain_suffix\": [\".ru\", \".рф\", \".su\", \"yandex.ru\", \"vk.com\", \"mail.ru\", \"sberbank.ru\", \"gosuslugi.ru\", \"rutube.ru\", \"kinopoisk.ru\"], \"action\": \"route\", \"outbound\": \"direct\" }")
+            rules.add("{ \"ip_cidr\": [\"10.0.0.0/8\", \"172.16.0.0/12\", \"192.168.0.0/16\", \"127.0.0.0/8\", \"100.64.0.0/10\", \"169.254.0.0/16\", \"224.0.0.0/4\"], \"action\": \"route\", \"outbound\": \"direct\" }")
         } else {
-            "\"172.19.0.1/30\""
+            // Черные списки: локальные адреса идут напрямую, остальное через VPN
+            rules.add("{ \"ip_cidr\": [\"10.0.0.0/8\", \"172.16.0.0/12\", \"192.168.0.0/16\", \"127.0.0.0/8\", \"100.64.0.0/10\", \"169.254.0.0/16\", \"224.0.0.0/4\"], \"action\": \"route\", \"outbound\": \"direct\" }")
+        }
+        
+        return rules.joinToString(",\n                  ")
+    }
+
+    private fun tunInbound(mtu: Int, ipv6Enabled: Boolean): String {
+        val addresses = if (ipv6Enabled) {
+            "\"172.19.0.1/28\", \"fdfe:dcba:9876::1/126\""
+        } else {
+            "\"172.19.0.1/28\""
         }
         return """
             {
               "type": "tun",
               "tag": "tun-in",
-              "interface_name": "liberta0",
               "address": [ $addresses ],
               "mtu": $mtu,
-              "auto_route": false,
-              "strict_route": $killSwitch,
+              "auto_route": true,
+              "strict_route": true,
               "stack": "gvisor"
             }
         """.trimIndent()
@@ -98,7 +128,7 @@ class SingBoxConfigBuilder {
             fields += "\"reality\": { \"enabled\": true, \"public_key\": \"${escape(server.publicKey.orEmpty())}\", \"short_id\": \"${escape(server.shortId.orEmpty())}\" }"
         }
         if (settings.labs.polymorphicCore) {
-            fields += "\"fragment\": { \"enabled\": true }"
+            fields += "\"fragment\": { \"enabled\": true, \"packets\": \"1-3\", \"length\": \"5-10\", \"interval\": \"1-5\" }"
         }
         return "{ ${fields.joinToString(", ")} }"
     }
@@ -112,14 +142,31 @@ class SingBoxConfigBuilder {
             else -> null
         }
 
-    private fun effectiveDnsServer(settings: LibertaSettings): String =
+    private fun effectiveDnsServer(settings: LibertaSettings): DnsEndpoint =
         when (settings.dnsProvider) {
-            com.liberta.vpn.data.DnsProvider.CUSTOM -> settings.customDns.takeIf { it.isNotBlank() } ?: "1.1.1.1"
-            else -> settings.dnsProvider.servers.firstOrNull() ?: "1.1.1.1"
+            com.liberta.vpn.data.DnsProvider.CLOUDFLARE -> DnsEndpoint.doh("1.1.1.1", "cloudflare-dns.com")
+            com.liberta.vpn.data.DnsProvider.GOOGLE -> DnsEndpoint.doh("8.8.8.8", "dns.google")
+            com.liberta.vpn.data.DnsProvider.ADGUARD -> DnsEndpoint.doh("94.140.14.14", "dns.adguard-dns.com")
+            com.liberta.vpn.data.DnsProvider.CUSTOM -> {
+                val custom = settings.customDns.trim()
+                DnsEndpoint.forAddress(custom.takeIf { it.isNotBlank() } ?: "1.1.1.1")
+            }
+            else -> DnsEndpoint.doh("1.1.1.1", "cloudflare-dns.com")
         }
 
     private fun effectiveMtu(settings: LibertaSettings): Int =
-        if (settings.autoMtu) 1500 else settings.mtu.coerceIn(1280, 9000)
+        if (settings.autoMtu) 1280 else settings.mtu.coerceIn(1280, 9000)
+
+    private fun DnsEndpoint.remoteJson(): String {
+        val escapedServer = escape(server)
+        val host = dohHost
+        return if (host != null) {
+            val escapedHost = escape(host)
+            """{ "type": "https", "tag": "dns-remote", "server": "$escapedServer", "server_port": 443, "path": "/dns-query", "headers": { "Host": "$escapedHost" }, "tls": { "enabled": true, "server_name": "$escapedHost" }, "detour": "proxy" }"""
+        } else {
+            """{ "type": "tcp", "tag": "dns-remote", "server": "$escapedServer", "server_port": 53, "detour": "proxy" }"""
+        }
+    }
 
     private fun escape(value: String): String =
         buildString(value.length) {
@@ -134,4 +181,21 @@ class SingBoxConfigBuilder {
                 }
             }
         }
+
+    private data class DnsEndpoint(
+        val server: String,
+        val dohHost: String? = null
+    ) {
+        companion object {
+            fun doh(server: String, host: String): DnsEndpoint = DnsEndpoint(server, host)
+
+            fun forAddress(server: String): DnsEndpoint =
+                when (server) {
+                    "1.1.1.1", "1.0.0.1" -> doh(server, "cloudflare-dns.com")
+                    "8.8.8.8", "8.8.4.4" -> doh(server, "dns.google")
+                    "94.140.14.14", "94.140.15.15" -> doh(server, "dns.adguard-dns.com")
+                    else -> DnsEndpoint(server)
+                }
+        }
+    }
 }

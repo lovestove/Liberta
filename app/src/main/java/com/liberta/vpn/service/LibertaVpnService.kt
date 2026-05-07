@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -40,6 +41,7 @@ class LibertaVpnService : VpnService() {
     private var monitorJob: Job? = null
     private var detachedTunFd: Int? = null
     private var phantomSession: PhantomCallSession? = null
+    private var compactNotification: Boolean = true
 
     private val container by lazy {
         (application as LibertaApplication).container
@@ -98,7 +100,11 @@ class LibertaVpnService : VpnService() {
     ) {
         connectJob?.cancel()
         connectJob = scope.launch {
-            startForeground(NOTIFICATION_ID, buildNotification("Liberta запускается"))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICATION_ID, buildNotification("Liberta запускается"), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification("Liberta запускается"))
+            }
             if (recovering) {
                 LibertaRuntime.update(ConnectionPhase.RECOVERING, method, profile, "Восстановление туннеля")
             }
@@ -115,6 +121,8 @@ class LibertaVpnService : VpnService() {
                         )
                     )
                 }
+                compactNotification = settings.compactNotification
+                updateNotification("Liberta запускается")
                 if (settings.labs.phantomCall) {
                     LibertaRuntime.update(
                         ConnectionPhase.CONNECTING,
@@ -141,7 +149,7 @@ class LibertaVpnService : VpnService() {
                 val primarySnapshot = container.subscriptionRepository.load(profile, forceRefresh = refresh)
                 val snapshot = if (primarySnapshot.candidates.isEmpty() && profile == ConnectionProfile.WHITELISTS) {
                     Log.w("LibertaVpnService", "profile=WHITELISTS has no VLESS endpoints, using free transport pool")
-                    container.subscriptionRepository.load(ConnectionProfile.BLACKLISTS, forceRefresh = refresh)
+                    container.subscriptionRepository.load(ConnectionProfile.BLACKLISTS, forceRefresh = true)
                 } else {
                     primarySnapshot
                 }
@@ -154,7 +162,8 @@ class LibertaVpnService : VpnService() {
                     "Проверка ${snapshot.candidates.size} серверов",
                     lastUpdatedEpochMs = snapshot.lastUpdatedEpochMs
                 )
-                val racing = container.serverRacer.race(snapshot.candidates)
+                val prioritizedCandidates = container.workingServersRepository.prioritize(profile, snapshot.candidates)
+                val racing = container.serverRacer.race(prioritizedCandidates)
                 val attempts = racing.tested
                     .filter { it.latencyMs != null }
                     .sortedBy { it.latencyMs }
@@ -192,37 +201,33 @@ class LibertaVpnService : VpnService() {
                         continue
                     }
                     detachedTunFd = tunFd
+                    
+                    // Даем системе время применить маршруты
+                    delay(500)
 
-                    if (probeInternet()) {
-                        LibertaRuntime.update(
-                            ConnectionPhase.CONNECTED,
-                            settings.connectionMethod,
-                            profile,
-                            "Работоспособность подтверждена",
-                            activeServer = selected,
-                            lastUpdatedEpochMs = snapshot.lastUpdatedEpochMs
-                        )
-                        connected = true
-                        break
-                    }
-
-                    Log.w("LibertaVpnService", "phase=tunnel_validation selected=${selected.endpoint} online=false")
-                    lastError = "Интернет-проверка через туннель не прошла"
-                    stopCoreOnly()
+                    val processInternetOk = probeInternet()
                     LibertaRuntime.update(
-                        ConnectionPhase.RACING,
+                        ConnectionPhase.CONNECTED,
                         settings.connectionMethod,
                         profile,
-                        "Сервер без интернета, пробую следующий",
+                        "VPN активен; системный трафик направлен в TUN",
                         activeServer = selected,
                         lastUpdatedEpochMs = snapshot.lastUpdatedEpochMs,
-                        error = lastError
+                        error = if (processInternetOk) null else "Процесс приложения исключен из VPN; нужна внешняя проверка трафика"
                     )
+                    Log.i(
+                        "LibertaVpnService",
+                        "phase=tunnel_validation selected=${selected.endpoint} process_online=$processInternetOk app_uid_excluded=true"
+                    )
+                    container.workingServersRepository.rememberWorking(selected)
+                    connected = true
+                    break
                 }
                 if (!connected) error(lastError ?: "Не удалось запустить рабочий туннель")
                 startTrafficMonitor()
                 updateNotification("Liberta активна")
             }.getOrElse { error ->
+                Log.e("LibertaVpnService", "Connection failed", error)
                 stopCoreOnly()
                 LibertaRuntime.update(
                     ConnectionPhase.ERROR,
@@ -259,15 +264,17 @@ class LibertaVpnService : VpnService() {
     }
 
     private fun establishTun(settings: LibertaSettings, selected: ServerCandidate): Int {
-        val mtu = if (settings.autoMtu) 1500 else settings.mtu
+        val mtu = if (settings.autoMtu) 1280 else settings.mtu.coerceIn(1280, 9000)
+        Log.i("LibertaVpnService", "Establishing TUN: mtu=$mtu, ipv6=${settings.ipv6Enabled}")
         val builder = Builder()
             .setSession("Liberta ${selected.profile.shortTitle}")
             .setMtu(mtu)
-            .addAddress("172.19.0.1", 30)
-            .addDnsServer(settings.systemDnsServer())
+            .addAddress("172.19.0.1", 28)
+            .addDnsServer("172.19.0.2")
             .addRoute("0.0.0.0", 0)
 
         if (settings.ipv6Enabled) {
+            Log.i("LibertaVpnService", "Adding IPv6 routes and addresses")
             builder
                 .addAddress("fdfe:dcba:9876::1", 126)
                 .addRoute("::", 0)
@@ -276,6 +283,15 @@ class LibertaVpnService : VpnService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             builder.setMetered(false)
         }
+
+        // Блокируем трафик до полной готовности туннеля
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && settings.killSwitch) {
+            // builder.setBlocking(true) // Это может вызвать проблемы на некоторых устройствах, лучше использовать маршруты
+        }
+
+        // libbox runs inside this process; keeping the app outside the VPN avoids proxying
+        // the core's own VLESS socket back into the TUN.
+        runCatching { builder.addDisallowedApplication(packageName) }
 
         val descriptor = builder.establish() ?: error("Android не выдал TUN интерфейс")
         return descriptor.detachFd()
@@ -362,6 +378,8 @@ class LibertaVpnService : VpnService() {
             .setContentText(text)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            .setSilent(compactNotification)
+            .setPriority(if (compactNotification) NotificationCompat.PRIORITY_MIN else NotificationCompat.PRIORITY_LOW)
             .setColor(getColor(R.color.liberta_notification))
             .build()
     }
@@ -393,17 +411,3 @@ class LibertaVpnService : VpnService() {
 private fun Intent.optionalBooleanExtra(name: String): Boolean? =
     if (hasExtra(name)) getBooleanExtra(name, false) else null
 
-private fun LibertaSettings.systemDnsServer(): String {
-    val candidate = if (dnsProvider == com.liberta.vpn.data.DnsProvider.CUSTOM) {
-        customDns.trim().takeIf { it.isNotBlank() } ?: "1.1.1.1"
-    } else {
-        dnsProvider.servers.firstOrNull() ?: "1.1.1.1"
-    }
-    return candidate
-        .removePrefix("https://")
-        .removePrefix("tls://")
-        .substringBefore("/")
-        .substringBefore(":")
-        .takeIf { it.count { ch -> ch == '.' } == 3 }
-        ?: "1.1.1.1"
-}

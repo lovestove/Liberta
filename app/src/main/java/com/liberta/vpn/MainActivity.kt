@@ -134,6 +134,7 @@ class MainActivity : ComponentActivity() {
             notificationLauncher()
         }
         val permissionIntent: Intent? = VpnService.prepare(this)
+        android.util.Log.i("LibertaPermission", "VpnService.prepare() returned: $permissionIntent")
         if (permissionIntent != null) {
             permissionLauncher(permissionIntent)
         } else {
