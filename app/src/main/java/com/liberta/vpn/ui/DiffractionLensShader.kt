@@ -23,24 +23,69 @@ internal object DiffractionLensShader {
         half4 main(float2 p) {
             float2 d = (p - center) / radius;
             float r = length(d);
+            if (r > 1.0) return half4(0.0);
             float angle = atan(d.y, d.x);
             float sphere = sqrt(max(0.0, 1.0 - r * r));
-            float rim = 1.0 - smoothstep(0.86, 1.02, r);
-            float edge = 1.0 - smoothstep(0.015, 0.075, abs(r - 0.82));
+
+            // 3D normal of glass sphere
+            float3 normal = float3(d.x, d.y, sphere);
+
+            // Light from upper-left
+            float3 lightDir = float3(-0.45, -0.55, 0.78);
+            float3 lightN = lightDir / length(lightDir);
+            float lambert = max(0.0, dot(normal, lightN));
+            float spec = pow(lambert, 28.0) * 1.4;
+
+            // Fresnel: bright at edge
+            float fresnel = pow(1.0 - sphere, 2.6);
+
+            // Caustics from refraction (rotating prism patterns)
             float causticA = pow(max(0.0, sin(angle * 7.0 + r * 17.0 - time * 2.2)), 9.0);
             float causticB = pow(max(0.0, cos(angle * 11.0 - r * 21.0 + time * 1.6)), 12.0);
-            float prism = 0.5 + 0.5 * sin(angle * 3.0 + r * 34.0 + time * 1.8);
-            float inner = smoothstep(0.92, 0.18, r);
-            float light = inner * (0.28 + sphere * 0.62) + edge * 0.36 + (causticA + causticB) * 0.14;
-            float alpha = min(0.22, rim * (0.035 + light * 0.18 + active * 0.04 + traffic * 0.08));
-            half3 ice = half3(0.92, 0.98, 1.0);
-            half3 mint = half3(0.74, 0.98, 0.89);
+            float caustic = (causticA + causticB) * (0.4 + traffic * 0.6);
+
+            // Top-left specular bright spot
+            float2 hp = float2(-0.32, -0.42);
+            float topHi = exp(-pow(length(d - hp), 2.0) * 9.0) * 0.85;
+
+            // Bottom-right inner shadow
+            float2 sh = float2(0.32, 0.40);
+            float botSh = exp(-pow(length(d - sh), 2.0) * 4.0) * 0.55;
+
+            // Color palette
+            half3 ice = half3(0.96, 0.99, 1.0);
+            half3 mid = half3(0.62, 0.82, 0.96);
+            half3 deep = half3(0.18, 0.34, 0.50);
+            half3 mint = half3(0.62, 0.96, 0.84);
             half3 gold = half3(1.0, 0.86, 0.45);
-            half3 blue = half3(0.58, 0.82, 1.0);
+            half3 blue = half3(0.46, 0.74, 1.0);
+
+            // Body shading: deep -> mid based on lambert
+            half3 base = mix(deep, mid, lambert);
+            // Active mode tint
+            base = mix(base, mint, active * 0.34 + traffic * 0.22);
+            // Top highlight
+            base = mix(base, ice, topHi);
+            // Bottom shadow
+            base = mix(base, half3(0.05, 0.10, 0.18), botSh * 0.55);
+            // Specular dot
+            base += ice * spec;
+
+            // Chromatic dispersion ring near edge
+            float prism = 0.5 + 0.5 * sin(angle * 3.0 + r * 34.0 + time * 1.8);
             half3 split = mix(blue, gold, prism);
-            half3 color = mix(ice, mint, active * 0.38 + traffic * 0.24);
-            color = mix(color, split, edge * 0.55 + (causticA + causticB) * 0.08);
-            return half4(color, alpha);
+            float dispersionRing = exp(-pow(r - 0.92, 2.0) * 80.0);
+            base = mix(base, split, dispersionRing * 0.55);
+
+            // Edge fresnel glow
+            base = mix(base, ice, fresnel * 0.50);
+            // Caustics overlay
+            base += half3(caustic * 0.16, caustic * 0.13, caustic * 0.10);
+
+            // Alpha: visible glass sphere
+            float core = 0.45 + lambert * 0.30 + topHi * 0.40 + fresnel * 0.30 + spec * 0.30;
+            float alpha = min(0.92, core);
+            return half4(base * alpha, alpha);
         }
     """
 
@@ -55,17 +100,17 @@ internal object DiffractionLensShader {
             float2 d = (p - center) / radius;
             float r = length(d);
             float angle = atan(d.y, d.x);
-            float halo = 1.0 - smoothstep(0.015, 0.070, abs(r - 0.72));
+            float halo = 1.0 - smoothstep(0.012, 0.080, abs(r - 0.72));
             float diffraction = pow(max(0.0, sin(r * 48.0 - time * 2.6 + angle * 4.0)), 8.0);
             float caustic = pow(max(0.0, cos(angle * 9.0 + r * 22.0 + time * 1.8)), 10.0);
             float chroma = 0.5 + 0.5 * sin(angle * 5.0 + r * 36.0 - time);
             float gated = halo + (1.0 - smoothstep(0.0, 0.14, abs(r - 0.52))) * 0.36;
-            float alpha = (halo * 0.10 + diffraction * 0.08 * gated + caustic * 0.05 * gated) * (0.55 + active * 0.30 + traffic * 0.40);
+            float alpha = (halo * 0.18 + diffraction * 0.14 * gated + caustic * 0.10 * gated) * (0.65 + active * 0.40 + traffic * 0.50);
             half3 blue = half3(0.42, 0.78, 1.0);
             half3 mint = half3(0.52, 1.0, 0.82);
             half3 gold = half3(1.0, 0.82, 0.36);
             half3 color = mix(mix(blue, mint, chroma), gold, diffraction * 0.45);
-            return half4(color, min(alpha, 0.36));
+            return half4(color, min(alpha, 0.55));
         }
     """
 
