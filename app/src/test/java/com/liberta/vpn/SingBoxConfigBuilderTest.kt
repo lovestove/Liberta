@@ -3,6 +3,7 @@ package com.liberta.vpn
 import com.liberta.vpn.core.SingBoxConfigBuilder
 import com.liberta.vpn.data.ConnectionProfile
 import com.liberta.vpn.data.DnsProvider
+import com.liberta.vpn.data.LabSettings
 import com.liberta.vpn.data.LibertaSettings
 import com.liberta.vpn.data.ServerCandidate
 import org.junit.Assert.assertTrue
@@ -17,7 +18,9 @@ class SingBoxConfigBuilderTest {
         assertTrue(json.contains("\"type\": \"vless\""))
         assertTrue(json.contains("\"server\": \"vpn.example\""))
         assertTrue(json.contains("\"final\": \"proxy\""))
-        assertTrue(json.contains("\"type\": \"tcp\""))
+        assertTrue(json.contains("\"type\": \"https\""))
+        assertTrue(json.contains("\"server_name\": \"cloudflare-dns.com\""))
+        assertTrue(json.contains("\"path\": \"/dns-query\""))
         assertTrue(json.contains("\"detour\": \"proxy\""))
         assertTrue(json.contains("\"action\": \"hijack-dns\""))
         assertTrue(json.contains("\"reality\""))
@@ -40,10 +43,38 @@ class SingBoxConfigBuilderTest {
         )
 
         assertTrue(json.contains("\"server\": \"9.9.9.9\""))
+        assertTrue(json.contains("\"type\": \"tcp\""))
         assertTrue(json.contains("\"mtu\": 1420"))
         assertTrue(json.contains("\"strict_route\": true"))
         assertTrue(json.contains("\"type\": \"mixed\""))
         assertTrue(json.contains("\"listen_port\": 10880"))
+    }
+
+    @Test
+    fun mapsKnownCustomDnsToDoh() {
+        val json = SingBoxConfigBuilder().build(
+            testCandidate(),
+            LibertaSettings(
+                dnsProvider = DnsProvider.CUSTOM,
+                customDns = "8.8.8.8"
+            )
+        )
+
+        assertTrue(json.contains("\"type\": \"https\""))
+        assertTrue(json.contains("\"server\": \"8.8.8.8\""))
+        assertTrue(json.contains("\"server_name\": \"dns.google\""))
+    }
+
+    @Test
+    fun phantomCallRoutesSipAndRtpDirectly() {
+        val json = SingBoxConfigBuilder().build(
+            testCandidate(),
+            LibertaSettings(labs = LabSettings(phantomCall = true))
+        )
+
+        assertTrue(json.contains("\"port\": [5060, 5061]"))
+        assertTrue(json.contains("\"port_range\": \"10000:20000\""))
+        assertTrue(json.contains("\"outbound\": \"direct\""))
     }
 
     private fun testCandidate(): ServerCandidate =

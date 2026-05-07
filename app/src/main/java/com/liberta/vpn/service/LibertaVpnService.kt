@@ -162,7 +162,8 @@ class LibertaVpnService : VpnService() {
                     "Проверка ${snapshot.candidates.size} серверов",
                     lastUpdatedEpochMs = snapshot.lastUpdatedEpochMs
                 )
-                val racing = container.serverRacer.race(snapshot.candidates)
+                val prioritizedCandidates = container.workingServersRepository.prioritize(profile, snapshot.candidates)
+                val racing = container.serverRacer.race(prioritizedCandidates)
                 val attempts = racing.tested
                     .filter { it.latencyMs != null }
                     .sortedBy { it.latencyMs }
@@ -204,19 +205,21 @@ class LibertaVpnService : VpnService() {
                     // Даем системе время применить маршруты
                     delay(500)
 
-                    val internetProbeOk = probeInternet()
+                    val processInternetOk = probeInternet()
                     LibertaRuntime.update(
                         ConnectionPhase.CONNECTED,
                         settings.connectionMethod,
                         profile,
-                        if (internetProbeOk) "Работоспособность подтверждена" else "Туннель запущен, нужна внешняя проверка",
+                        "VPN активен; системный трафик направлен в TUN",
                         activeServer = selected,
                         lastUpdatedEpochMs = snapshot.lastUpdatedEpochMs,
-                        error = if (internetProbeOk) null else "Проверка из процесса приложения идет вне VPN"
+                        error = if (processInternetOk) null else "Процесс приложения исключен из VPN; нужна внешняя проверка трафика"
                     )
-                    if (!internetProbeOk) {
-                        Log.w("LibertaVpnService", "phase=tunnel_validation selected=${selected.endpoint} online=unknown app_uid_excluded=true")
-                    }
+                    Log.i(
+                        "LibertaVpnService",
+                        "phase=tunnel_validation selected=${selected.endpoint} process_online=$processInternetOk app_uid_excluded=true"
+                    )
+                    container.workingServersRepository.rememberWorking(selected)
                     connected = true
                     break
                 }

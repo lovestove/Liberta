@@ -225,7 +225,7 @@ data class VpnStatus(
         ConnectionPhase.RECOVERING
     )
 
-    val isConnected: Boolean = phase == ConnectionPhase.CONNECTED
+    val isConnected: Boolean = phase == ConnectionPhase.CONNECTED || phase == ConnectionPhase.DEGRADED
 }
 
 data class RacingResult(

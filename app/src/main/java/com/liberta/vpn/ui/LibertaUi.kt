@@ -60,6 +60,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -139,6 +140,9 @@ private val Emerald = Color(0xFF5FE2B3)
 private val Azure = Color(0xFF77B8FF)
 private val Amber = Color(0xFFE8B452)
 private val Rose = Color(0xFFD96C79)
+private val DiffractionA = Color(0x66A5D9FF)
+private val DiffractionB = Color(0x55F4C87D)
+private val DiffractionC = Color(0x55A7F2CF)
 
 @Composable
 private fun rememberDeviceParallax(): Offset {
@@ -416,8 +420,9 @@ private fun FloatingTopActions(onSettings: () -> Unit, onQr: () -> Unit, modifie
         Text(
             "Liberta",
             color = TextPrimary.copy(alpha = 0.86f),
-            fontSize = 23.sp,
-            fontWeight = FontWeight.SemiBold
+            fontSize = 24.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 0.6.sp
         )
         Spacer(Modifier.weight(1f))
         GlassIconButton(onClick = onQr) {
@@ -435,10 +440,10 @@ private fun HelpGratitudeRibbon(visible: Boolean, modifier: Modifier = Modifier)
                 .background(
                     Brush.horizontalGradient(
                         listOf(
-                            Color.White.copy(alpha = 0.54f),
-                            Emerald.copy(alpha = 0.20f),
-                            Azure.copy(alpha = 0.16f),
-                            Color.White.copy(alpha = 0.44f)
+                            Color.White.copy(alpha = 0.62f),
+                            Emerald.copy(alpha = 0.28f),
+                            Azure.copy(alpha = 0.24f),
+                            Color.White.copy(alpha = 0.50f)
                         )
                     )
                 )
@@ -1254,7 +1259,7 @@ private fun SettingsScreen(
         }
 
         item {
-            SettingsPanel("Лаборатория Liberta") {
+            LabsPanel("Лаборатория Liberta") {
                 LabsSection(
                     title = "Мимикрия под звонки",
                     description = "Автоматически создает комнату звонка и включает бесплатный auto-bridge без ручной ссылки.",
@@ -1363,7 +1368,16 @@ private fun QrOverlay(onClose: () -> Unit, onShareApp: () -> Unit) {
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color(0xCCEEF6FA))
+            .background(
+                Brush.radialGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.82f),
+                        Azure.copy(alpha = 0.22f),
+                        Color(0xDDEAF3F8)
+                    ),
+                    radius = 1200f
+                )
+            )
             .clickable(onClick = onClose),
         contentAlignment = Alignment.Center
     ) {
@@ -1395,6 +1409,11 @@ private fun QrOverlay(onClose: () -> Unit, onShareApp: () -> Unit) {
                         .padding(top = 12.dp)
                         .size(230.dp)
                         .clip(RoundedCornerShape(18.dp))
+                        .border(
+                            1.2.dp,
+                            Brush.linearGradient(listOf(DiffractionA, DiffractionB, DiffractionC, Color.White.copy(alpha = 0.8f))),
+                            RoundedCornerShape(18.dp)
+                        )
                 )
                 LensActionButton(
                     onClick = onShareApp,
@@ -1679,6 +1698,42 @@ private fun SettingsPanel(title: String, content: @Composable ColumnScope.() -> 
 }
 
 @Composable
+private fun LabsPanel(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(28.dp))
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.78f),
+                        Gold.copy(alpha = 0.20f),
+                        Azure.copy(alpha = 0.12f),
+                        Color.White.copy(alpha = 0.58f)
+                    )
+                )
+            )
+            .border(1.dp, Color.White.copy(alpha = 0.88f), RoundedCornerShape(28.dp))
+    ) {
+        Canvas(Modifier.matchParentSize()) {
+            drawRoundRect(
+                brush = Brush.linearGradient(
+                    listOf(DiffractionA, DiffractionB, DiffractionC, Color.Transparent),
+                    start = Offset(size.width * 0.05f, 0f),
+                    end = Offset(size.width * 0.95f, size.height)
+                ),
+                cornerRadius = CornerRadius(28.dp.toPx(), 28.dp.toPx()),
+                style = Stroke(width = 1.1.dp.toPx())
+            )
+        }
+        Column(Modifier.padding(18.dp)) {
+            SectionTitle(title)
+            content()
+        }
+    }
+}
+
+@Composable
 private fun LabsSection(
     title: String,
     description: String,
@@ -1692,7 +1747,15 @@ private fun LabsSection(
             .fillMaxWidth()
             .padding(top = 12.dp)
             .clip(RoundedCornerShape(18.dp))
-            .background(Color.White.copy(alpha = 0.38f))
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.48f),
+                        Gold.copy(alpha = 0.14f),
+                        Color.White.copy(alpha = 0.36f)
+                    )
+                )
+            )
             .border(1.dp, Color.White.copy(alpha = 0.68f), RoundedCornerShape(18.dp))
             .clickable { expanded = !expanded }
             .padding(14.dp)
@@ -1760,7 +1823,21 @@ private fun ToggleLine(
             }
             Text(help, color = Muted, fontSize = 11.sp, lineHeight = 14.sp)
         }
-        Switch(checked = checked, onCheckedChange = onChecked, enabled = enabled)
+        Switch(
+            checked = checked,
+            onCheckedChange = onChecked,
+            enabled = enabled,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.White,
+                checkedTrackColor = Emerald.copy(alpha = 0.88f),
+                checkedBorderColor = Emerald.copy(alpha = 0.96f),
+                uncheckedThumbColor = Color.White.copy(alpha = 0.94f),
+                uncheckedTrackColor = Color.White.copy(alpha = 0.56f),
+                uncheckedBorderColor = Color.White.copy(alpha = 0.84f),
+                disabledCheckedTrackColor = Emerald.copy(alpha = 0.34f),
+                disabledUncheckedTrackColor = Color.White.copy(alpha = 0.26f)
+            )
+        )
     }
 }
 
@@ -2021,6 +2098,20 @@ private fun GlassPanel(modifier: Modifier = Modifier, content: @Composable () ->
                 phase = phase,
                 cornerRadiusPx = 28.dp.toPx()
             )
+            drawRoundRect(
+                brush = Brush.linearGradient(
+                    listOf(
+                        DiffractionA.copy(alpha = 0.70f),
+                        DiffractionB.copy(alpha = 0.52f),
+                        DiffractionC.copy(alpha = 0.55f),
+                        Color.Transparent
+                    ),
+                    start = Offset(size.width * 0.04f, 0f),
+                    end = Offset(size.width * 0.94f, size.height)
+                ),
+                cornerRadius = CornerRadius(28.dp.toPx(), 28.dp.toPx()),
+                style = Stroke(width = 1.05.dp.toPx())
+            )
         }
         content()
     }
@@ -2028,7 +2119,7 @@ private fun GlassPanel(modifier: Modifier = Modifier, content: @Composable () ->
 
 private fun statusText(status: VpnStatus): String =
     when (status.phase) {
-        ConnectionPhase.CONNECTED -> "Работоспособность подтверждена"
+        ConnectionPhase.CONNECTED -> status.message.ifBlank { "VPN активен" }
         ConnectionPhase.DEGRADED -> "Работоспособность не подтверждена"
         ConnectionPhase.DISCONNECTED -> "Готов к подключению"
         ConnectionPhase.REFRESHING -> "Обновляю подписки"
@@ -2041,7 +2132,8 @@ private fun statusText(status: VpnStatus): String =
 private fun statusDetail(status: VpnStatus): String {
     return when {
         status.error != null -> status.error
-        status.isConnected -> "Интернет проверен через защищенный туннель"
+        status.phase == ConnectionPhase.CONNECTED -> status.activeServer?.endpoint?.let { "Активный сервер $it" } ?: "Туннель запущен"
+        status.phase == ConnectionPhase.DEGRADED -> status.message
         status.lastUpdatedEpochMs != null -> "Последнее обновление ${status.lastUpdatedEpochMs.formatTime()}"
         else -> "Выберите режим и коснитесь центральной линзы"
     }

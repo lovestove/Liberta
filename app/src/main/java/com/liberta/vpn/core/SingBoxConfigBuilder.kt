@@ -34,7 +34,7 @@ class SingBoxConfigBuilder {
               "log": { "level": "info", "timestamp": true },
               "dns": {
                 "servers": [
-                  { "type": "tcp", "tag": "dns-remote", "server": "$dnsServer", "server_port": 53, "detour": "proxy" },
+                  ${dnsServer.remoteJson()},
                   { "tag": "dns-direct", "address": "8.8.8.8", "detour": "direct", "strategy": "ipv4_only" }
                 ],
                 "final": "dns-remote"
@@ -142,14 +142,31 @@ class SingBoxConfigBuilder {
             else -> null
         }
 
-    private fun effectiveDnsServer(settings: LibertaSettings): String =
+    private fun effectiveDnsServer(settings: LibertaSettings): DnsEndpoint =
         when (settings.dnsProvider) {
-            com.liberta.vpn.data.DnsProvider.CUSTOM -> settings.customDns.takeIf { it.isNotBlank() } ?: "1.1.1.1"
-            else -> settings.dnsProvider.servers.firstOrNull() ?: "1.1.1.1"
+            com.liberta.vpn.data.DnsProvider.CLOUDFLARE -> DnsEndpoint.doh("1.1.1.1", "cloudflare-dns.com")
+            com.liberta.vpn.data.DnsProvider.GOOGLE -> DnsEndpoint.doh("8.8.8.8", "dns.google")
+            com.liberta.vpn.data.DnsProvider.ADGUARD -> DnsEndpoint.doh("94.140.14.14", "dns.adguard-dns.com")
+            com.liberta.vpn.data.DnsProvider.CUSTOM -> {
+                val custom = settings.customDns.trim()
+                DnsEndpoint.forAddress(custom.takeIf { it.isNotBlank() } ?: "1.1.1.1")
+            }
+            else -> DnsEndpoint.doh("1.1.1.1", "cloudflare-dns.com")
         }
 
     private fun effectiveMtu(settings: LibertaSettings): Int =
         if (settings.autoMtu) 1280 else settings.mtu.coerceIn(1280, 9000)
+
+    private fun DnsEndpoint.remoteJson(): String {
+        val escapedServer = escape(server)
+        val host = dohHost
+        return if (host != null) {
+            val escapedHost = escape(host)
+            """{ "type": "https", "tag": "dns-remote", "server": "$escapedServer", "server_port": 443, "path": "/dns-query", "headers": { "Host": "$escapedHost" }, "tls": { "enabled": true, "server_name": "$escapedHost" }, "detour": "proxy" }"""
+        } else {
+            """{ "type": "tcp", "tag": "dns-remote", "server": "$escapedServer", "server_port": 53, "detour": "proxy" }"""
+        }
+    }
 
     private fun escape(value: String): String =
         buildString(value.length) {
@@ -164,4 +181,21 @@ class SingBoxConfigBuilder {
                 }
             }
         }
+
+    private data class DnsEndpoint(
+        val server: String,
+        val dohHost: String? = null
+    ) {
+        companion object {
+            fun doh(server: String, host: String): DnsEndpoint = DnsEndpoint(server, host)
+
+            fun forAddress(server: String): DnsEndpoint =
+                when (server) {
+                    "1.1.1.1", "1.0.0.1" -> doh(server, "cloudflare-dns.com")
+                    "8.8.8.8", "8.8.4.4" -> doh(server, "dns.google")
+                    "94.140.14.14", "94.140.15.15" -> doh(server, "dns.adguard-dns.com")
+                    else -> DnsEndpoint(server)
+                }
+        }
+    }
 }
