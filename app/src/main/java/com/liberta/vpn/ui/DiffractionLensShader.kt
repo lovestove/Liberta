@@ -72,6 +72,7 @@ internal object DiffractionLensShader {
         half4 main(float2 p) {
             float2 d = (p - center) / radius;
             float r = length(d);
+            if (r > 1.0) return half4(0.0);
             float angle = atan(d.y, d.x);
             
             // Sphere physics
