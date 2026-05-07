@@ -86,6 +86,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -194,7 +195,14 @@ fun LibertaApp(
     var showQr by rememberSaveable { mutableStateOf(false) }
     var surgeKey by remember { mutableStateOf(0) }
     var surgeOrigin by remember { mutableStateOf(Offset.Zero) }
+    var fusionKey by remember { mutableStateOf(0) }
+    var fusionOrigin by remember { mutableStateOf(Offset.Zero) }
+    var fusionAccent by remember { mutableStateOf(Azure) }
+    var touchKey by remember { mutableStateOf(0) }
+    var touchOrigin by remember { mutableStateOf(Offset.Zero) }
     val surge = remember { Animatable(1f) }
+    val fusion = remember { Animatable(1f) }
+    val touch = remember { Animatable(1f) }
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val tone = remember {
@@ -206,6 +214,20 @@ fun LibertaApp(
         if (surgeKey > 0) {
             surge.snapTo(0f)
             surge.animateTo(1f, tween(1_360, easing = FastOutSlowInEasing))
+        }
+    }
+
+    LaunchedEffect(fusionKey) {
+        if (fusionKey > 0) {
+            fusion.snapTo(0f)
+            fusion.animateTo(1f, tween(860, easing = FastOutSlowInEasing))
+        }
+    }
+
+    LaunchedEffect(touchKey) {
+        if (touchKey > 0) {
+            touch.snapTo(0f)
+            touch.animateTo(1f, tween(820, easing = FastOutSlowInEasing))
         }
     }
 
@@ -226,13 +248,31 @@ fun LibertaApp(
     }
 
     MaterialTheme {
-        Box(Modifier.fillMaxSize().background(Ink)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Ink)
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val down = event.changes.firstOrNull { it.pressed && !it.previousPressed }
+                            if (down != null) {
+                                touchOrigin = down.position
+                                touchKey += 1
+                            }
+                        }
+                    }
+                }
+        ) {
             LivingBackground(
                 status = status,
                 meshEnabled = settings.labs.sovereignRelay,
                 surgeProgress = surge.value,
                 surgeOrigin = surgeOrigin,
-                parallax = parallax
+                parallax = parallax,
+                touchProgress = touch.value,
+                touchOrigin = touchOrigin
             )
 
             Crossfade(targetState = screen, label = "screen") { target ->
@@ -252,7 +292,13 @@ fun LibertaApp(
                                 onPower()
                             }
                         },
-                        onConnectionModePower = onConnectionModePower,
+                        onConnectionModePower = { method, origin ->
+                            fusionOrigin = origin
+                            fusionAccent = method.fluxAccent()
+                            fusionKey += 1
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onConnectionModePower(method)
+                        },
                         onSettingsChange = onSettingsChange,
                         onLabsChange = onLabsChange,
                         onRecover = onRecover
@@ -275,6 +321,12 @@ fun LibertaApp(
                 }
             }
 
+            FusionDropOverlay(
+                progress = fusion.value,
+                origin = fusionOrigin,
+                accent = fusionAccent
+            )
+
             if (showQr) {
                 QrOverlay(onClose = { showQr = false }, onShareApp = onShareApp)
             }
@@ -289,7 +341,7 @@ private fun HomeScreen(
     onSettings: () -> Unit,
     onQr: () -> Unit,
     onPower: (Offset) -> Unit,
-    onConnectionModePower: (ConnectionMethod) -> Unit,
+    onConnectionModePower: (ConnectionMethod, Offset) -> Unit,
     onSettingsChange: ((LibertaSettings) -> LibertaSettings) -> Unit,
     onLabsChange: ((LabSettings) -> LabSettings) -> Unit,
     onRecover: () -> Unit
@@ -440,9 +492,17 @@ private fun PowerLens(status: VpnStatus, modifier: Modifier, onPower: (Offset) -
             val radius = size.minDimension * 0.38f * scale
             val active = status.isConnected || status.isBusy
             val accent = status.accent()
+            val turbulence = status.networkTurbulence()
+            val flowSpeed = status.networkFlowSpeed()
 
-            drawRefractionCaustics(center, radius, flow, active, status.trafficPulse)
-            drawLensFieldArcs(center, radius, flow, active, status.trafficPulse, accent)
+            drawPowerBloom(center, radius, status.trafficPulse, accent, active)
+            with(DiffractionLensShader) {
+                drawDistortionField(center, radius * 1.13f, flow * 6.28f, active, status.trafficPulse)
+                drawLens(center, radius, flow * 6.28f, active, status.trafficPulse)
+            }
+            drawInternalFluidDynamics(center, radius, flow, active, status.trafficPulse, turbulence, accent)
+            drawRefractionCaustics(center, radius, flow, active, status.trafficPulse, turbulence, flowSpeed)
+            drawLensFieldArcs(center, radius, flow, active, status.trafficPulse, turbulence, accent)
             drawCircle(
                 color = Color.White.copy(alpha = 0.56f),
                 radius = radius * 1.005f,
@@ -460,10 +520,92 @@ private fun PowerLens(status: VpnStatus, modifier: Modifier, onPower: (Offset) -
                 radius = radius * 0.18f,
                 center = Offset(center.x - radius * 0.30f, center.y - radius * 0.36f)
             )
+            drawDiffractionRim(center, radius, flow, active, status.trafficPulse, accent)
             with(DiffractionLensShader) {
                 drawPowerGlyph(center, radius * 0.27f, flow * 6.28f, active, status.trafficPulse)
             }
         }
+    }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPowerBloom(
+    center: Offset,
+    radius: Float,
+    traffic: Float,
+    accent: Color,
+    active: Boolean
+) {
+    val bloom = if (active) 0.10f + traffic * 0.20f else 0.05f
+    drawCircle(
+        brush = Brush.radialGradient(
+            listOf(
+                Color.White.copy(alpha = bloom * 0.72f),
+                accent.copy(alpha = bloom),
+                Gold.copy(alpha = traffic * 0.10f),
+                Color.Transparent
+            ),
+            center = center,
+            radius = radius * (1.85f + traffic * 0.34f)
+        ),
+        radius = radius * (1.85f + traffic * 0.34f),
+        center = center
+    )
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawInternalFluidDynamics(
+    center: Offset,
+    radius: Float,
+    phase: Float,
+    active: Boolean,
+    traffic: Float,
+    turbulence: Float,
+    accent: Color
+) {
+    val laminar = 1f - turbulence
+    val lines = (6 + traffic * 8f + turbulence * 5f).roundToInt().coerceIn(6, 18)
+    repeat(lines) { index ->
+        val lane = (index / (lines - 1f)).coerceIn(0f, 1f)
+        val angle = -0.44f + lane * 0.88f
+        val x0 = center.x - radius * (0.68f - traffic * 0.10f)
+        val x3 = center.x + radius * (0.66f + traffic * 0.18f)
+        val y = center.y + sin(angle) * radius * 0.50f
+        val boil = sin(phase * 6.28f * (1.2f + turbulence) + index * 1.37f)
+        val bend = radius * (0.08f + turbulence * 0.18f) * boil
+        val path = Path().apply {
+            moveTo(x0, y - bend * 0.20f)
+            cubicTo(
+                center.x - radius * (0.26f + laminar * 0.10f),
+                y - radius * 0.10f + bend,
+                center.x + radius * (0.25f + traffic * 0.10f),
+                y + radius * 0.10f - bend,
+                x3,
+                y + bend * 0.18f
+            )
+        }
+        drawPath(
+            path = path,
+            color = listOf(Azure, Emerald, Gold, accent)[index % 4]
+                .copy(alpha = (0.06f + traffic * 0.12f + laminar * 0.035f) * if (active) 1f else 0.55f),
+            style = Stroke(
+                width = (0.70f + traffic * 1.20f + turbulence * 0.55f).dp.toPx(),
+                cap = StrokeCap.Round
+            )
+        )
+    }
+
+    val eddies = (2 + turbulence * 8f + traffic * 3f).roundToInt().coerceIn(2, 12)
+    repeat(eddies) { index ->
+        val angle = phase * 6.28f * (0.8f + turbulence) + index * 2.03f
+        val p = Offset(
+            center.x + cos(angle) * radius * (0.20f + (index % 4) * 0.10f),
+            center.y + sin(angle * 0.83f) * radius * (0.18f + (index % 3) * 0.12f)
+        )
+        drawCircle(
+            color = Color.White.copy(alpha = (0.06f + turbulence * 0.11f + traffic * 0.07f) * if (active) 1f else 0.45f),
+            radius = radius * (0.018f + (index % 3) * 0.006f),
+            center = p,
+            style = Stroke(width = (0.6f + turbulence).dp.toPx())
+        )
     }
 }
 
@@ -472,32 +614,43 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawRefractionCaust
     radius: Float,
     phase: Float,
     active: Boolean,
-    traffic: Float
+    traffic: Float,
+    turbulence: Float,
+    flowSpeed: Float
 ) {
     val streamAlpha = if (active) 0.24f + traffic * 0.18f else 0.12f
-    repeat(7) { index ->
-        val angle = (phase * 360f + index * 51f) * (PI.toFloat() / 180f)
+    repeat(9) { index ->
+        val wobble = sin(phase * 6.28f * (1.4f + turbulence) + index * 1.31f) * turbulence
+        val angle = (phase * 360f * (0.62f + flowSpeed * 0.86f) + index * 43f + wobble * 22f) * (PI.toFloat() / 180f)
         val start = Offset(
-            center.x + cos(angle) * radius * (0.58f + index * 0.012f),
-            center.y + sin(angle) * radius * (0.44f + index * 0.018f)
+            center.x + cos(angle) * radius * (0.50f + index * 0.014f),
+            center.y + sin(angle) * radius * (0.40f + index * 0.018f)
         )
         val c1 = Offset(
-            center.x + cos(angle + 0.82f) * radius * (1.06f + traffic * 0.10f),
-            center.y + sin(angle + 0.42f) * radius * (0.82f + traffic * 0.08f)
+            center.x + cos(angle + 0.82f + wobble * 0.22f) * radius * (1.04f + traffic * 0.14f + turbulence * 0.10f),
+            center.y + sin(angle + 0.42f - wobble * 0.18f) * radius * (0.80f + traffic * 0.09f + turbulence * 0.08f)
         )
         val end = Offset(
-            center.x + cos(angle + 1.42f) * radius * (1.34f + traffic * 0.16f),
-            center.y + sin(angle + 1.06f) * radius * (1.04f + traffic * 0.12f)
+            center.x + cos(angle + 1.42f) * radius * (1.28f + traffic * 0.22f + flowSpeed * 0.08f),
+            center.y + sin(angle + 1.06f + wobble * 0.24f) * radius * (1.00f + traffic * 0.15f + turbulence * 0.10f)
         )
-        val path = Path().apply {
-            moveTo(start.x, start.y)
-            quadraticTo(c1.x, c1.y, end.x, end.y)
+        val baseColor = listOf(Azure, Emerald, Gold)[index % 3]
+        val split = radius * (0.004f + traffic * 0.004f + turbulence * 0.003f)
+        listOf(
+            Triple(Offset(-split, 0f), Azure, 0.55f),
+            Triple(Offset(split * 0.55f, split * 0.35f), Gold, 0.42f),
+            Triple(Offset.Zero, baseColor, 1f)
+        ).forEach { (shift, color, weight) ->
+            val path = Path().apply {
+                moveTo(start.x + shift.x, start.y + shift.y)
+                quadraticTo(c1.x + shift.x, c1.y + shift.y, end.x + shift.x, end.y + shift.y)
+            }
+            drawPath(
+                path = path,
+                color = color.copy(alpha = streamAlpha * weight),
+                style = Stroke(width = (0.70f + index * 0.07f + traffic * 0.55f).dp.toPx(), cap = StrokeCap.Round)
+            )
         }
-        drawPath(
-            path = path,
-            color = listOf(Azure, Emerald, Gold)[index % 3].copy(alpha = streamAlpha),
-            style = Stroke(width = (0.9f + index * 0.08f).dp.toPx(), cap = StrokeCap.Round)
-        )
     }
     repeat(6) { index ->
         val angle = (phase * 2f * PI.toFloat()) + index * 1.08f
@@ -523,16 +676,17 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLensFieldArcs(
     phase: Float,
     active: Boolean,
     traffic: Float,
+    turbulence: Float,
     accent: Color
 ) {
     val fieldAlpha = if (active) 0.20f + traffic * 0.14f else 0.10f
     repeat(9) { index ->
-        val ring = radius * (0.82f + index * 0.055f)
-        val start = phase * 360f + index * 39f
+        val ring = radius * (0.82f + index * 0.055f + sin(phase * 6.28f + index) * turbulence * 0.014f)
+        val start = phase * 360f * (0.86f + traffic * 0.42f) + index * 39f + turbulence * sin(index + phase * 6.28f) * 18f
         drawArc(
             color = listOf(Azure, Emerald, Gold, accent)[index % 4].copy(alpha = fieldAlpha * (1f - index * 0.055f)),
             startAngle = start,
-            sweepAngle = 18f + index * 2.8f,
+            sweepAngle = 18f + index * 2.8f + traffic * 16f - turbulence * 4f,
             useCenter = false,
             topLeft = Offset(center.x - ring, center.y - ring),
             size = Size(ring * 2f, ring * 2f),
@@ -557,13 +711,43 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLensFieldArcs(
     }
 }
 
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawDiffractionRim(
+    center: Offset,
+    radius: Float,
+    phase: Float,
+    active: Boolean,
+    traffic: Float,
+    accent: Color
+) {
+    val alpha = (if (active) 0.22f else 0.12f) + traffic * 0.16f
+    val colors = listOf(Azure, Emerald, Gold)
+    repeat(3) { index ->
+        val shift = (index - 1) * radius * 0.006f
+        drawArc(
+            color = colors[index].copy(alpha = alpha * (0.72f - index * 0.08f)),
+            startAngle = phase * 360f + index * 21f,
+            sweepAngle = 236f + traffic * 40f,
+            useCenter = false,
+            topLeft = Offset(center.x - radius * 1.018f + shift, center.y - radius * 1.018f - shift),
+            size = Size(radius * 2.036f, radius * 2.036f),
+            style = Stroke(width = (0.70f + traffic * 0.80f).dp.toPx(), cap = StrokeCap.Round)
+        )
+    }
+    drawCircle(
+        color = accent.copy(alpha = alpha * 0.45f),
+        radius = radius * (1.055f + traffic * 0.025f),
+        center = center,
+        style = Stroke(width = (0.55f + traffic * 0.55f).dp.toPx())
+    )
+}
+
 @Composable
 private fun FloatingControlDock(
     settings: LibertaSettings,
     status: VpnStatus,
     onSettingsChange: ((LibertaSettings) -> LibertaSettings) -> Unit,
     onLabsChange: ((LabSettings) -> LabSettings) -> Unit,
-    onConnectionModePower: (ConnectionMethod) -> Unit,
+    onConnectionModePower: (ConnectionMethod, Offset) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var infoMode by rememberSaveable { mutableStateOf<ConnectionMode?>(null) }
@@ -591,14 +775,14 @@ private fun FloatingControlDock(
                     title = mode.title,
                     selected = selectedMode == mode,
                     enabled = !status.isBusy && !status.isConnected,
-                    onClick = {
+                    onClick = { origin ->
                         onSettingsChange { current ->
                             current.copy(
                                 connectionMethod = mode.method,
                                 profile = mode.method.profile
                             )
                         }
-                        onConnectionModePower(mode.method)
+                        onConnectionModePower(mode.method, origin)
                     },
                     onInfo = {
                         infoMode = if (infoMode == mode) null else mode
@@ -629,7 +813,7 @@ private fun DockButton(
     title: String,
     selected: Boolean,
     enabled: Boolean,
-    onClick: () -> Unit,
+    onClick: (Offset) -> Unit,
     onInfo: () -> Unit
 ) {
     val infinite = rememberInfiniteTransition(label = "dockLens")
@@ -653,11 +837,17 @@ private fun DockButton(
         animationSpec = spring(dampingRatio = 0.7f, stiffness = 400f),
         label = "dockScale"
     )
+    var centerInRoot by remember { mutableStateOf(Offset.Zero) }
 
     Box(
         Modifier
             .fillMaxWidth()
             .height(52.dp)
+            .onGloballyPositioned { coordinates ->
+                centerInRoot = coordinates.localToRoot(
+                    Offset(coordinates.size.width / 2f, coordinates.size.height / 2f)
+                )
+            }
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -669,7 +859,7 @@ private fun DockButton(
                 indication = null,
                 onClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                    onClick()
+                    onClick(centerInRoot)
                 }
             )
             .alpha(alpha)
@@ -701,6 +891,69 @@ private fun DockButton(
                     modifier = Modifier.size(18.dp)
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun FusionDropOverlay(progress: Float, origin: Offset, accent: Color) {
+    if (progress >= 1f || origin == Offset.Zero) return
+    Canvas(Modifier.fillMaxSize()) {
+        val target = Offset(size.width * 0.50f, size.height * 0.30f)
+        val eased = progress * progress * (3f - 2f * progress)
+        val control = Offset(
+            (origin.x + target.x) * 0.5f,
+            minOf(origin.y, target.y) - size.height * 0.10f
+        )
+        val oneMinus = 1f - eased
+        val current = Offset(
+            oneMinus * oneMinus * origin.x + 2f * oneMinus * eased * control.x + eased * eased * target.x,
+            oneMinus * oneMinus * origin.y + 2f * oneMinus * eased * control.y + eased * eased * target.y
+        )
+        val radius = (18.dp.toPx() * (1f - eased * 0.44f)).coerceAtLeast(7.dp.toPx())
+        val bridgeAlpha = (1f - progress).coerceIn(0f, 1f) * 0.28f
+        val bridge = Path().apply {
+            moveTo(origin.x, origin.y)
+            quadraticTo(control.x, control.y, current.x, current.y)
+        }
+        drawPath(
+            path = bridge,
+            color = accent.copy(alpha = bridgeAlpha),
+            style = Stroke(width = (9.dp.toPx() * (1f - progress * 0.55f)).coerceAtLeast(2.dp.toPx()), cap = StrokeCap.Round)
+        )
+        drawPath(
+            path = bridge,
+            color = Color.White.copy(alpha = bridgeAlpha * 1.25f),
+            style = Stroke(width = (3.dp.toPx() * (1f - progress * 0.40f)).coerceAtLeast(1.dp.toPx()), cap = StrokeCap.Round)
+        )
+        drawCircle(
+            brush = Brush.radialGradient(
+                listOf(
+                    Color.White.copy(alpha = 0.78f * (1f - progress * 0.18f)),
+                    accent.copy(alpha = 0.48f),
+                    Gold.copy(alpha = 0.14f),
+                    Color.Transparent
+                ),
+                center = current,
+                radius = radius * 2.8f
+            ),
+            radius = radius * 2.8f,
+            center = current
+        )
+        drawCircle(
+            color = Color.White.copy(alpha = 0.72f * (1f - progress)),
+            radius = radius,
+            center = current,
+            style = Stroke(width = 1.2.dp.toPx())
+        )
+        if (progress > 0.70f) {
+            val merge = ((progress - 0.70f) / 0.30f).coerceIn(0f, 1f)
+            drawCircle(
+                color = accent.copy(alpha = (1f - merge) * 0.22f),
+                radius = radius * (2.0f + merge * 4.8f),
+                center = target,
+                style = Stroke(width = (4.dp.toPx() * (1f - merge)).coerceAtLeast(0.5.dp.toPx()))
+            )
         }
     }
 }
@@ -1162,7 +1415,9 @@ private fun LivingBackground(
     meshEnabled: Boolean,
     surgeProgress: Float,
     surgeOrigin: Offset,
-    parallax: Offset
+    parallax: Offset,
+    touchProgress: Float,
+    touchOrigin: Offset
 ) {
     val infinite = rememberInfiniteTransition(label = "livingBackground")
     val drift by infinite.animateFloat(
@@ -1172,23 +1427,8 @@ private fun LivingBackground(
         label = "drift"
     )
 
-    var touchOffset by remember { mutableStateOf<Offset?>(null) }
-    val touchRipple = remember { Animatable(0f) }
-    val scope = rememberCoroutineScope()
-
     Canvas(
-        Modifier
-            .fillMaxSize()
-            .pointerInput(Unit) {
-                detectTapGestures { offset ->
-                    touchOffset = offset
-                    scope.launch {
-                        touchRipple.snapTo(0f)
-                        touchRipple.animateTo(1f, tween(800, easing = FastOutSlowInEasing))
-                        touchOffset = null
-                    }
-                }
-            }
+        Modifier.fillMaxSize()
     ) {
         drawRect(
             Brush.linearGradient(
@@ -1208,6 +1448,7 @@ private fun LivingBackground(
         val orbAlpha = if (status.isConnected) 0.36f + pulse * 0.22f else 0.13f
         val left = Offset(size.width * (0.18f + drift * 0.14f), size.height * 0.34f) + parallaxLarge
         val right = Offset(size.width * (0.82f - drift * 0.08f), size.height * 0.67f) - parallaxMedium
+        drawEnvironmentCaustics(status, drift, parallax)
         drawCircle(
             brush = Brush.radialGradient(
                 listOf(
@@ -1279,17 +1520,8 @@ private fun LivingBackground(
         }
         drawDataParticles(status, drift, parallax)
 
-        touchOffset?.let { offset ->
-            val rippleRadius = (size.maxDimension * 0.3f * touchRipple.value).coerceAtLeast(1f)
-            drawCircle(
-                brush = Brush.radialGradient(
-                    listOf(accent.copy(alpha = 0.15f * (1f - touchRipple.value)), Color.Transparent),
-                    center = offset,
-                    radius = rippleRadius
-                ),
-                radius = rippleRadius,
-                center = offset
-            )
+        if (touchProgress < 1f && touchOrigin != Offset.Zero) {
+            drawTactileRefractionWave(touchOrigin, touchProgress, accent)
         }
 
         if (surgeProgress < 1f) {
@@ -1306,6 +1538,99 @@ private fun LivingBackground(
                 )
             }
         }
+    }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawEnvironmentCaustics(
+    status: VpnStatus,
+    phase: Float,
+    parallax: Offset
+) {
+    val active = status.isConnected || status.isBusy
+    val pulse = status.trafficPulse
+    val turbulence = status.networkTurbulence()
+    val lensShadow = Offset(
+        size.width * 0.50f + parallax.x * size.width * 0.040f,
+        size.height * 0.50f + parallax.y * size.height * 0.030f
+    )
+    val shadowSize = Size(size.width * 0.62f, size.height * 0.21f)
+    drawOval(
+        brush = Brush.radialGradient(
+            listOf(
+                Color.White.copy(alpha = 0.25f + pulse * 0.13f),
+                Azure.copy(alpha = if (active) 0.080f + pulse * 0.050f else 0.035f),
+                Gold.copy(alpha = pulse * 0.045f),
+                Color.Transparent
+            ),
+            center = lensShadow,
+            radius = size.width * 0.48f
+        ),
+        topLeft = Offset(lensShadow.x - shadowSize.width / 2f, lensShadow.y - shadowSize.height / 2f),
+        size = shadowSize
+    )
+
+    val alpha = if (active) 0.13f + pulse * 0.13f else 0.045f
+    repeat(7) { index ->
+        val y = lensShadow.y + sin(phase * 6.28f + index * 0.7f) * size.height * (0.010f + turbulence * 0.010f)
+        val path = Path().apply {
+            moveTo(size.width * (0.16f + index * 0.015f), y)
+            cubicTo(
+                size.width * (0.32f + phase * 0.05f),
+                y - size.height * (0.035f + index * 0.002f),
+                size.width * (0.62f - phase * 0.04f),
+                y + size.height * (0.030f + turbulence * 0.020f),
+                size.width * (0.86f - index * 0.012f),
+                y - size.height * 0.010f
+            )
+        }
+        drawPath(
+            path = path,
+            color = listOf(Color.White, Azure, Emerald, Gold)[index % 4].copy(alpha = alpha * (1f - index * 0.08f)),
+            style = Stroke(width = (0.75f + pulse * 1.20f).dp.toPx(), cap = StrokeCap.Round)
+        )
+    }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTactileRefractionWave(
+    origin: Offset,
+    progress: Float,
+    accent: Color
+) {
+    val fade = (1f - progress).coerceIn(0f, 1f)
+    val radius = (size.maxDimension * 0.38f * progress).coerceAtLeast(1f)
+    drawCircle(
+        brush = Brush.radialGradient(
+            listOf(
+                Color.White.copy(alpha = 0.18f * fade),
+                accent.copy(alpha = 0.13f * fade),
+                Color.Transparent
+            ),
+            center = origin,
+            radius = radius
+        ),
+        radius = radius,
+        center = origin
+    )
+    listOf(Azure, Emerald, Gold).forEachIndexed { index, color ->
+        val offset = Offset((index - 1) * 2.5.dp.toPx(), (1 - index) * 1.5.dp.toPx())
+        drawCircle(
+            color = color.copy(alpha = fade * (0.36f - index * 0.045f)),
+            radius = radius * (0.78f + index * 0.055f),
+            center = origin + offset,
+            style = Stroke(width = (1.2f + index * 0.45f).dp.toPx(), cap = StrokeCap.Round)
+        )
+    }
+    repeat(6) { index ->
+        val ring = radius * (0.32f + index * 0.10f)
+        drawArc(
+            color = listOf(Azure, Gold, Emerald)[index % 3].copy(alpha = fade * 0.22f),
+            startAngle = progress * 240f + index * 58f,
+            sweepAngle = 30f + progress * 28f,
+            useCenter = false,
+            topLeft = Offset(origin.x - ring, origin.y - ring),
+            size = Size(ring * 2f, ring * 2f),
+            style = Stroke(width = (0.9f + progress * 0.8f).dp.toPx(), cap = StrokeCap.Round)
+        )
     }
 }
 
@@ -1730,6 +2055,45 @@ private fun VpnStatus.accent(): Color =
         ConnectionPhase.DISCONNECTED -> Gold
         else -> Azure
     }
+
+private fun ConnectionMethod.fluxAccent(): Color =
+    when (this) {
+        ConnectionMethod.BLACKLISTS -> Azure
+        ConnectionMethod.WHITELISTS -> Emerald
+        ConnectionMethod.PHANTOM_CALL -> Gold
+        ConnectionMethod.MESH_ACCESS -> Color(0xFF8FE6FF)
+    }
+
+private fun VpnStatus.networkTurbulence(): Float {
+    val latencyPressure = activeServer?.latencyMs
+        ?.takeIf { phase != ConnectionPhase.DISCONNECTED }
+        ?.let { ((it - 90L).coerceAtLeast(0L).toFloat() / 520f).coerceIn(0f, 1f) }
+        ?: when {
+            phase == ConnectionPhase.ERROR -> 0.95f
+            isBusy -> 0.58f
+            phase == ConnectionPhase.DEGRADED -> 0.82f
+            else -> 0.26f
+        }
+    val phasePressure = when (phase) {
+        ConnectionPhase.CONNECTED -> 0.08f
+        ConnectionPhase.DEGRADED -> 0.72f
+        ConnectionPhase.ERROR -> 0.95f
+        ConnectionPhase.RECOVERING -> 0.78f
+        ConnectionPhase.RACING,
+        ConnectionPhase.CONNECTING,
+        ConnectionPhase.REFRESHING -> 0.52f
+        ConnectionPhase.DISCONNECTED -> 0.18f
+    }
+    return (latencyPressure * 0.56f + phasePressure * 0.34f + trafficPulse * 0.10f).coerceIn(0f, 1f)
+}
+
+private fun VpnStatus.networkFlowSpeed(): Float {
+    val latencyBoost = activeServer?.latencyMs
+        ?.takeIf { phase != ConnectionPhase.DISCONNECTED }
+        ?.let { (1f - (it.toFloat() / 650f).coerceIn(0f, 1f)) }
+        ?: if (isBusy) 0.64f else 0.34f
+    return (0.24f + latencyBoost * 0.42f + trafficPulse * 0.34f).coerceIn(0f, 1f)
+}
 
 private fun Long.formatTime(): String =
     SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(Date(this))

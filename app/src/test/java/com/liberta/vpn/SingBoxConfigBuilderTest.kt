@@ -17,7 +17,8 @@ class SingBoxConfigBuilderTest {
         assertTrue(json.contains("\"type\": \"vless\""))
         assertTrue(json.contains("\"server\": \"vpn.example\""))
         assertTrue(json.contains("\"final\": \"proxy\""))
-        assertTrue(json.contains("\"detour\": \"direct\""))
+        assertTrue(json.contains("\"type\": \"tcp\""))
+        assertTrue(json.contains("\"detour\": \"proxy\""))
         assertTrue(json.contains("\"action\": \"hijack-dns\""))
         assertTrue(json.contains("\"reality\""))
     }
@@ -38,7 +39,7 @@ class SingBoxConfigBuilderTest {
             )
         )
 
-        assertTrue(json.contains("\"address\": \"9.9.9.9\""))
+        assertTrue(json.contains("\"server\": \"9.9.9.9\""))
         assertTrue(json.contains("\"mtu\": 1420"))
         assertTrue(json.contains("\"strict_route\": true"))
         assertTrue(json.contains("\"type\": \"mixed\""))

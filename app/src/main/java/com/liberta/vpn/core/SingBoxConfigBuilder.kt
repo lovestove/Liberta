@@ -34,8 +34,8 @@ class SingBoxConfigBuilder {
               "log": { "level": "info", "timestamp": true },
               "dns": {
                 "servers": [
-                  { "tag": "dns-remote", "address": "$dnsServer", "strategy": "ipv4_only" },
-                  { "tag": "dns-direct", "address": "8.8.8.8", "strategy": "ipv4_only" }
+                  { "type": "tcp", "tag": "dns-remote", "server": "$dnsServer", "server_port": 53, "detour": "proxy" },
+                  { "tag": "dns-direct", "address": "8.8.8.8", "detour": "direct", "strategy": "ipv4_only" }
                 ],
                 "final": "dns-remote"
               },
@@ -51,8 +51,8 @@ class SingBoxConfigBuilder {
                 "rules": [
                   $routeRules
                 ],
-                "auto_detect_interface": true,
-                "final": ${if (isWhitelists) "\"direct\"" else "\"proxy\""}
+                "auto_detect_interface": false,
+                "final": "proxy"
               }
             }
         """.trimIndent()
@@ -60,20 +60,23 @@ class SingBoxConfigBuilder {
     
     private fun buildRouteRules(isWhitelists: Boolean, phantomCall: Boolean): String {
         val rules = mutableListOf<String>()
+        rules.add("{ \"ip_cidr\": \"172.19.0.2/32\", \"port\": 53, \"action\": \"hijack-dns\" }")
+        rules.add("{ \"protocol\": \"dns\", \"action\": \"hijack-dns\" }")
         
         // Исключаем SIP/RTP для звонков (Phantom Call)
         if (phantomCall) {
-            rules.add("{ \"network\": \"udp\", \"port\": [5060, 5061, 10000, 20000], \"outbound\": \"direct\" }")
-            rules.add("{ \"network\": \"tcp\", \"port\": [5060, 5061], \"outbound\": \"direct\" }")
+            rules.add("{ \"network\": \"udp\", \"port\": [5060, 5061], \"action\": \"route\", \"outbound\": \"direct\" }")
+            rules.add("{ \"network\": \"udp\", \"port_range\": \"10000:20000\", \"action\": \"route\", \"outbound\": \"direct\" }")
+            rules.add("{ \"network\": \"tcp\", \"port\": [5060, 5061], \"action\": \"route\", \"outbound\": \"direct\" }")
         }
         
         if (isWhitelists) {
             // Белые списки: российские сайты идут напрямую, остальное через VPN
-            rules.add("{ \"domain_suffix\": [\".ru\", \".рф\", \".su\", \"yandex.ru\", \"vk.com\", \"mail.ru\", \"sberbank.ru\", \"gosuslugi.ru\", \"rutube.ru\", \"kinopoisk.ru\"], \"outbound\": \"direct\" }")
-            rules.add("{ \"ip_cidr\": [\"10.0.0.0/8\", \"172.16.0.0/12\", \"192.168.0.0/16\", \"127.0.0.0/8\", \"100.64.0.0/10\", \"169.254.0.0/16\", \"224.0.0.0/4\"], \"outbound\": \"direct\" }")
+            rules.add("{ \"domain_suffix\": [\".ru\", \".рф\", \".su\", \"yandex.ru\", \"vk.com\", \"mail.ru\", \"sberbank.ru\", \"gosuslugi.ru\", \"rutube.ru\", \"kinopoisk.ru\"], \"action\": \"route\", \"outbound\": \"direct\" }")
+            rules.add("{ \"ip_cidr\": [\"10.0.0.0/8\", \"172.16.0.0/12\", \"192.168.0.0/16\", \"127.0.0.0/8\", \"100.64.0.0/10\", \"169.254.0.0/16\", \"224.0.0.0/4\"], \"action\": \"route\", \"outbound\": \"direct\" }")
         } else {
             // Черные списки: локальные адреса идут напрямую, остальное через VPN
-            rules.add("{ \"ip_cidr\": [\"10.0.0.0/8\", \"172.16.0.0/12\", \"192.168.0.0/16\", \"127.0.0.0/8\", \"100.64.0.0/10\", \"169.254.0.0/16\", \"224.0.0.0/4\"], \"outbound\": \"direct\" }")
+            rules.add("{ \"ip_cidr\": [\"10.0.0.0/8\", \"172.16.0.0/12\", \"192.168.0.0/16\", \"127.0.0.0/8\", \"100.64.0.0/10\", \"169.254.0.0/16\", \"224.0.0.0/4\"], \"action\": \"route\", \"outbound\": \"direct\" }")
         }
         
         return rules.joinToString(",\n                  ")
@@ -92,6 +95,7 @@ class SingBoxConfigBuilder {
               "address": [ $addresses ],
               "mtu": $mtu,
               "auto_route": true,
+              "strict_route": true,
               "stack": "gvisor"
             }
         """.trimIndent()
