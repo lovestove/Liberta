@@ -1280,13 +1280,14 @@ private fun LivingBackground(
         drawDataParticles(status, drift, parallax)
 
         touchOffset?.let { offset ->
+            val rippleRadius = (size.maxDimension * 0.3f * touchRipple.value).coerceAtLeast(1f)
             drawCircle(
                 brush = Brush.radialGradient(
                     listOf(accent.copy(alpha = 0.15f * (1f - touchRipple.value)), Color.Transparent),
                     center = offset,
-                    radius = size.maxDimension * 0.3f * touchRipple.value
+                    radius = rippleRadius
                 ),
-                radius = size.maxDimension * 0.3f * touchRipple.value,
+                radius = rippleRadius,
                 center = offset
             )
         }

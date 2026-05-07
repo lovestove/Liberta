@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -98,7 +99,11 @@ class LibertaVpnService : VpnService() {
     ) {
         connectJob?.cancel()
         connectJob = scope.launch {
-            startForeground(NOTIFICATION_ID, buildNotification("Liberta запускается"))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICATION_ID, buildNotification("Liberta запускается"), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification("Liberta запускается"))
+            }
             if (recovering) {
                 LibertaRuntime.update(ConnectionPhase.RECOVERING, method, profile, "Восстановление туннеля")
             }
@@ -192,6 +197,9 @@ class LibertaVpnService : VpnService() {
                         continue
                     }
                     detachedTunFd = tunFd
+                    
+                    // Даем системе время применить маршруты
+                    delay(500)
 
                     if (probeInternet()) {
                         LibertaRuntime.update(
@@ -223,6 +231,7 @@ class LibertaVpnService : VpnService() {
                 startTrafficMonitor()
                 updateNotification("Liberta активна")
             }.getOrElse { error ->
+                Log.e("LibertaVpnService", "Connection failed", error)
                 stopCoreOnly()
                 LibertaRuntime.update(
                     ConnectionPhase.ERROR,
@@ -259,15 +268,18 @@ class LibertaVpnService : VpnService() {
     }
 
     private fun establishTun(settings: LibertaSettings, selected: ServerCandidate): Int {
-        val mtu = if (settings.autoMtu) 1500 else settings.mtu
+        val mtu = if (settings.autoMtu) 1280 else settings.mtu.coerceIn(1280, 9000)
+        Log.i("LibertaVpnService", "Establishing TUN: mtu=$mtu, ipv6=${settings.ipv6Enabled}")
         val builder = Builder()
             .setSession("Liberta ${selected.profile.shortTitle}")
             .setMtu(mtu)
-            .addAddress("172.19.0.1", 30)
+            .addAddress("172.19.0.1", 28)
             .addDnsServer(settings.systemDnsServer())
+            .addDnsServer("8.8.8.8")
             .addRoute("0.0.0.0", 0)
 
         if (settings.ipv6Enabled) {
+            Log.i("LibertaVpnService", "Adding IPv6 routes and addresses")
             builder
                 .addAddress("fdfe:dcba:9876::1", 126)
                 .addRoute("::", 0)
@@ -276,6 +288,14 @@ class LibertaVpnService : VpnService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             builder.setMetered(false)
         }
+
+        // Блокируем трафик до полной готовности туннеля
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && settings.killSwitch) {
+            // builder.setBlocking(true) // Это может вызвать проблемы на некоторых устройствах, лучше использовать маршруты
+        }
+        
+        // Исключаем само приложение из туннеля для стабильности (sing-box использует protect, но это дополнительный слой)
+        runCatching { builder.addDisallowedApplication(packageName) }
 
         val descriptor = builder.establish() ?: error("Android не выдал TUN интерфейс")
         return descriptor.detachFd()

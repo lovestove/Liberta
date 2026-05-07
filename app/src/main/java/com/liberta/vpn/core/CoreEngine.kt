@@ -136,7 +136,7 @@ class LibboxCoreEngine : CoreEngine {
         options.javaClass.findMethod("setCommandServerListenPort", parameterCount = 1)?.invoke(options, 0)
         options.javaClass.findMethod("setCommandServerSecret", parameterCount = 1)?.invoke(options, "liberta")
         options.javaClass.findMethod("setLogMaxLines", parameterCount = 1)?.invoke(options, 300L)
-        options.javaClass.findMethod("setDebug", parameterCount = 1)?.invoke(options, false)
+        options.javaClass.findMethod("setDebug", parameterCount = 1)?.invoke(options, true)
         val setup = clazz.findMethod("setup", parameterCount = 1)
             ?: error("Libbox.setup(options) not found")
         setup.invoke(null, options)
@@ -168,6 +168,7 @@ class LibboxCoreEngine : CoreEngine {
                 "UsePlatformAutoDetectInterfaceControl", "usePlatformAutoDetectInterfaceControl" -> true
                 "AutoDetectInterfaceControl", "autoDetectInterfaceControl" -> {
                     val fd = (args?.firstOrNull() as? Number)?.toInt() ?: return null
+                    Log.i("LibertaCore", "protecting fd=$fd")
                     if (!protect(fd)) error("VpnService.protect($fd) failed")
                     null
                 }

@@ -13,6 +13,55 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 
 internal object DiffractionLensShader {
+    private const val BioticAgsl = """
+        uniform float2 resolution;
+        uniform float time;
+        uniform float active;
+        uniform float traffic;
+
+        float hash(float n) { return fract(sin(n) * 43758.5453123); }
+        float noise(float3 x) {
+            float3 p = floor(x);
+            float3 f = fract(x);
+            f = f * f * (3.0 - 2.0 * f);
+            float n = p.x + p.y * 57.0 + 113.0 * p.z;
+            return mix(mix(mix(hash(n + 0.0), hash(n + 1.0), f.x),
+                           mix(hash(n + 57.0), hash(n + 58.0), f.x), f.y),
+                       mix(mix(hash(n + 113.0), hash(n + 114.0), f.x),
+                           mix(hash(n + 170.0), hash(n + 171.0), f.x), f.y), f.z);
+        }
+
+        half4 main(float2 p) {
+            float2 uv = p / resolution.xy;
+            float2 q = (p - resolution.xy * 0.5) / min(resolution.x, resolution.y);
+            
+            // Background organic depth
+            float d = noise(float3(q * 2.0, time * 0.1));
+            half3 base = mix(half3(0.04, 0.07, 0.12), half3(0.02, 0.04, 0.08), d);
+            
+            // Mycelium threads (using noise as distance field)
+            float threads = 0.0;
+            for(float i = 1.0; i < 4.0; i++) {
+                float freq = pow(2.0, i);
+                float n = noise(float3(q * freq + time * 0.05 * i, i * 13.0));
+                threads += smoothstep(0.48, 0.52, n) * (1.0 / i);
+            }
+            
+            // Bioluminescence
+            float glow = pow(threads, 3.0) * (0.8 + 0.5 * sin(time * 2.0 + length(q) * 10.0));
+            half3 cyan = half3(0.3, 0.9, 1.0);
+            half3 emerald = half3(0.2, 1.0, 0.6);
+            half3 biolum = mix(cyan, emerald, sin(time + q.x));
+            
+            half3 color = base + biolum * glow * (0.3 + active * 0.4 + traffic * 0.5);
+            
+            // Subtle "metabolism" pulse
+            color *= 1.0 + 0.05 * sin(time * 1.5);
+            
+            return half4(color, 1.0);
+        }
+    """
+
     private const val Agsl = """
         uniform float2 center;
         uniform float radius;
@@ -24,22 +73,32 @@ internal object DiffractionLensShader {
             float2 d = (p - center) / radius;
             float r = length(d);
             float angle = atan(d.y, d.x);
+            
+            // Sphere physics
             float sphere = sqrt(max(0.0, 1.0 - r * r));
-            float rim = 1.0 - smoothstep(0.86, 1.02, r);
-            float edge = 1.0 - smoothstep(0.015, 0.075, abs(r - 0.82));
-            float causticA = pow(max(0.0, sin(angle * 7.0 + r * 17.0 - time * 2.2)), 9.0);
-            float causticB = pow(max(0.0, cos(angle * 11.0 - r * 21.0 + time * 1.6)), 12.0);
-            float prism = 0.5 + 0.5 * sin(angle * 3.0 + r * 34.0 + time * 1.8);
-            float inner = smoothstep(0.92, 0.18, r);
-            float light = inner * (0.28 + sphere * 0.62) + edge * 0.36 + (causticA + causticB) * 0.14;
-            float alpha = min(0.22, rim * (0.035 + light * 0.18 + active * 0.04 + traffic * 0.08));
-            half3 ice = half3(0.92, 0.98, 1.0);
-            half3 mint = half3(0.74, 0.98, 0.89);
-            half3 gold = half3(1.0, 0.86, 0.45);
-            half3 blue = half3(0.58, 0.82, 1.0);
-            half3 split = mix(blue, gold, prism);
-            half3 color = mix(ice, mint, active * 0.38 + traffic * 0.24);
-            color = mix(color, split, edge * 0.55 + (causticA + causticB) * 0.08);
+            float rim = 1.0 - smoothstep(0.88, 1.05, r);
+            
+            // Chromatic dispersion (spectral split)
+            float dispR = 1.0 - smoothstep(0.01, 0.08, abs(r - 0.81));
+            float dispG = 1.0 - smoothstep(0.01, 0.08, abs(r - 0.83));
+            float dispB = 1.0 - smoothstep(0.01, 0.08, abs(r - 0.85));
+            
+            // Organic caustics
+            float causticA = pow(max(0.0, sin(angle * 6.0 + r * 14.0 - time * 1.8 + sin(time * 0.5))), 10.0);
+            float causticB = pow(max(0.0, cos(angle * 13.0 - r * 24.0 + time * 2.2 + cos(time * 0.7))), 14.0);
+            float prism = 0.5 + 0.5 * sin(angle * 4.0 + r * 42.0 + time * 1.4);
+            
+            float light = (0.22 + sphere * 0.72) + (dispR + dispG + dispB) * 0.15 + (causticA + causticB) * 0.18;
+            float alpha = min(0.32, rim * (0.04 + light * 0.22 + active * 0.06 + traffic * 0.12));
+            
+            half3 crystal = half3(0.96, 0.99, 1.0);
+            half3 spectral = mix(half3(1.0, 0.4, 0.4), half3(0.4, 1.0, 0.4), dispG);
+            spectral = mix(spectral, half3(0.4, 0.4, 1.0), dispB);
+            
+            half3 color = mix(crystal, spectral, (dispR + dispG + dispB) * 0.4);
+            color = mix(color, half3(0.6, 0.9, 1.0), active * 0.35 + traffic * 0.28);
+            color += (causticA + causticB) * 0.12;
+            
             return half4(color, alpha);
         }
     """
@@ -55,17 +114,23 @@ internal object DiffractionLensShader {
             float2 d = (p - center) / radius;
             float r = length(d);
             float angle = atan(d.y, d.x);
-            float halo = 1.0 - smoothstep(0.015, 0.070, abs(r - 0.72));
-            float diffraction = pow(max(0.0, sin(r * 48.0 - time * 2.6 + angle * 4.0)), 8.0);
-            float caustic = pow(max(0.0, cos(angle * 9.0 + r * 22.0 + time * 1.8)), 10.0);
-            float chroma = 0.5 + 0.5 * sin(angle * 5.0 + r * 36.0 - time);
-            float gated = halo + (1.0 - smoothstep(0.0, 0.14, abs(r - 0.52))) * 0.36;
-            float alpha = (halo * 0.10 + diffraction * 0.08 * gated + caustic * 0.05 * gated) * (0.55 + active * 0.30 + traffic * 0.40);
-            half3 blue = half3(0.42, 0.78, 1.0);
-            half3 mint = half3(0.52, 1.0, 0.82);
-            half3 gold = half3(1.0, 0.82, 0.36);
-            half3 color = mix(mix(blue, mint, chroma), gold, diffraction * 0.45);
-            return half4(color, min(alpha, 0.36));
+            
+            float ripple = sin(r * 42.0 - time * 3.4 + angle * 3.0);
+            float halo = 1.0 - smoothstep(0.010, 0.090, abs(r - 0.76 + ripple * 0.015));
+            float diffraction = pow(max(0.0, ripple), 12.0);
+            float caustic = pow(max(0.0, cos(angle * 11.0 + r * 28.0 + time * 2.1)), 11.0);
+            
+            float gated = halo + (1.0 - smoothstep(0.0, 0.18, abs(r - 0.56))) * 0.42;
+            float alpha = (halo * 0.12 + diffraction * 0.10 * gated + caustic * 0.07 * gated) * (0.60 + active * 0.35 + traffic * 0.45);
+            
+            half3 violet = half3(0.7, 0.6, 1.0);
+            half3 cyan = half3(0.4, 1.0, 1.0);
+            half3 gold = half3(1.0, 0.85, 0.4);
+            
+            half3 color = mix(cyan, violet, r);
+            color = mix(color, gold, diffraction * 0.5 + caustic * 0.3);
+            
+            return half4(color, min(alpha, 0.42));
         }
     """
 
@@ -215,6 +280,27 @@ internal object DiffractionLensShader {
                 size = androidx.compose.ui.geometry.Size(radius * (0.84f + index * 0.14f), radius * (0.84f + index * 0.14f)),
                 style = Stroke(width = radius * 0.010f, cap = StrokeCap.Round)
             )
+        }
+    }
+
+    fun DrawScope.drawBioticBackground(time: Float, active: Boolean, traffic: Float) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            runCatching {
+                val shader = RuntimeShader(BioticAgsl).apply {
+                    setFloatUniform("resolution", size.width, size.height)
+                    setFloatUniform("time", time)
+                    setFloatUniform("active", if (active) 1f else 0f)
+                    setFloatUniform("traffic", traffic)
+                }
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    this.shader = shader
+                }
+                drawIntoCanvas { canvas ->
+                    canvas.nativeCanvas.drawRect(0f, 0f, size.width, size.height, paint)
+                }
+            }.getOrElse {
+                // Fallback handled in LivingBackground
+            }
         }
     }
 }

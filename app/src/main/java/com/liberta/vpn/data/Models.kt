@@ -162,7 +162,7 @@ data class LibertaSettings(
     val customDns: String = "",
     val autoMtu: Boolean = true,
     val mtu: Int = 1500,
-    val ipv6Enabled: Boolean = false,
+    val ipv6Enabled: Boolean = true,
     val killSwitch: Boolean = true,
     val proxyEnabled: Boolean = false,
     val proxyPort: Int = 10808,

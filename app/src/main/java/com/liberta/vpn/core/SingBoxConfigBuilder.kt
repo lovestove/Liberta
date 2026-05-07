@@ -1,5 +1,6 @@
 package com.liberta.vpn.core
 
+import com.liberta.vpn.data.ConnectionProfile
 import com.liberta.vpn.data.LibertaSettings
 import com.liberta.vpn.data.ServerCandidate
 
@@ -7,8 +8,11 @@ class SingBoxConfigBuilder {
     fun build(selected: ServerCandidate, settings: LibertaSettings): String {
         val dnsServer = effectiveDnsServer(settings)
         val mtu = effectiveMtu(settings)
+        val profile = settings.profile
+        val isWhitelists = profile == ConnectionProfile.WHITELISTS
+        
         val inbounds = buildList {
-            add(tunInbound(mtu, settings.ipv6Enabled, settings.killSwitch))
+            add(tunInbound(mtu, settings.ipv6Enabled))
             if (settings.proxyEnabled) {
                 add(
                     """
@@ -22,15 +26,18 @@ class SingBoxConfigBuilder {
                 )
             }
         }.joinToString(",\n")
+        
+        val routeRules = buildRouteRules(isWhitelists, settings.labs.phantomCall)
 
         return """
             {
               "log": { "level": "info", "timestamp": true },
               "dns": {
                 "servers": [
-                  { "tag": "primary", "address": "${escape(dnsServer)}", "strategy": "prefer_ipv4", "detour": "direct" }
+                  { "tag": "dns-remote", "address": "$dnsServer", "strategy": "ipv4_only" },
+                  { "tag": "dns-direct", "address": "8.8.8.8", "strategy": "ipv4_only" }
                 ],
-                "final": "primary"
+                "final": "dns-remote"
               },
               "inbounds": [
                 $inbounds
@@ -42,30 +49,49 @@ class SingBoxConfigBuilder {
               ],
               "route": {
                 "rules": [
-                  { "inbound": "tun-in", "protocol": "dns", "action": "hijack-dns" }
+                  $routeRules
                 ],
                 "auto_detect_interface": true,
-                "final": "proxy"
+                "final": ${if (isWhitelists) "\"direct\"" else "\"proxy\""}
               }
             }
         """.trimIndent()
     }
-
-    private fun tunInbound(mtu: Int, ipv6Enabled: Boolean, killSwitch: Boolean): String {
-        val addresses = if (ipv6Enabled) {
-            "\"172.19.0.1/30\", \"fdfe:dcba:9876::1/126\""
+    
+    private fun buildRouteRules(isWhitelists: Boolean, phantomCall: Boolean): String {
+        val rules = mutableListOf<String>()
+        
+        // Исключаем SIP/RTP для звонков (Phantom Call)
+        if (phantomCall) {
+            rules.add("{ \"network\": \"udp\", \"port\": [5060, 5061, 10000, 20000], \"outbound\": \"direct\" }")
+            rules.add("{ \"network\": \"tcp\", \"port\": [5060, 5061], \"outbound\": \"direct\" }")
+        }
+        
+        if (isWhitelists) {
+            // Белые списки: российские сайты идут напрямую, остальное через VPN
+            rules.add("{ \"domain_suffix\": [\".ru\", \".рф\", \".su\", \"yandex.ru\", \"vk.com\", \"mail.ru\", \"sberbank.ru\", \"gosuslugi.ru\", \"rutube.ru\", \"kinopoisk.ru\"], \"outbound\": \"direct\" }")
+            rules.add("{ \"ip_cidr\": [\"10.0.0.0/8\", \"172.16.0.0/12\", \"192.168.0.0/16\", \"127.0.0.0/8\", \"100.64.0.0/10\", \"169.254.0.0/16\", \"224.0.0.0/4\"], \"outbound\": \"direct\" }")
         } else {
-            "\"172.19.0.1/30\""
+            // Черные списки: локальные адреса идут напрямую, остальное через VPN
+            rules.add("{ \"ip_cidr\": [\"10.0.0.0/8\", \"172.16.0.0/12\", \"192.168.0.0/16\", \"127.0.0.0/8\", \"100.64.0.0/10\", \"169.254.0.0/16\", \"224.0.0.0/4\"], \"outbound\": \"direct\" }")
+        }
+        
+        return rules.joinToString(",\n                  ")
+    }
+
+    private fun tunInbound(mtu: Int, ipv6Enabled: Boolean): String {
+        val addresses = if (ipv6Enabled) {
+            "\"172.19.0.1/28\", \"fdfe:dcba:9876::1/126\""
+        } else {
+            "\"172.19.0.1/28\""
         }
         return """
             {
               "type": "tun",
               "tag": "tun-in",
-              "interface_name": "liberta0",
               "address": [ $addresses ],
               "mtu": $mtu,
-              "auto_route": false,
-              "strict_route": $killSwitch,
+              "auto_route": true,
               "stack": "gvisor"
             }
         """.trimIndent()
@@ -98,7 +124,7 @@ class SingBoxConfigBuilder {
             fields += "\"reality\": { \"enabled\": true, \"public_key\": \"${escape(server.publicKey.orEmpty())}\", \"short_id\": \"${escape(server.shortId.orEmpty())}\" }"
         }
         if (settings.labs.polymorphicCore) {
-            fields += "\"fragment\": { \"enabled\": true }"
+            fields += "\"fragment\": { \"enabled\": true, \"packets\": \"1-3\", \"length\": \"5-10\", \"interval\": \"1-5\" }"
         }
         return "{ ${fields.joinToString(", ")} }"
     }
@@ -119,7 +145,7 @@ class SingBoxConfigBuilder {
         }
 
     private fun effectiveMtu(settings: LibertaSettings): Int =
-        if (settings.autoMtu) 1500 else settings.mtu.coerceIn(1280, 9000)
+        if (settings.autoMtu) 1280 else settings.mtu.coerceIn(1280, 9000)
 
     private fun escape(value: String): String =
         buildString(value.length) {
