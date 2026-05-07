@@ -6,8 +6,12 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.media.AudioAttributes
+import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioTrack
 import android.media.ToneGenerator
+import android.view.HapticFeedbackConstants
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
@@ -68,6 +72,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -83,13 +88,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -110,8 +118,12 @@ import com.liberta.vpn.data.PhantomTransportService
 import com.liberta.vpn.data.RelayRole
 import com.liberta.vpn.data.TlsFingerprintProfile
 import com.liberta.vpn.data.VpnStatus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.EnumMap
@@ -146,17 +158,32 @@ private fun rememberDeviceParallax(): Offset {
 
     DisposableEffect(context) {
         val manager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
-        val sensor = manager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        val sensor = manager?.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
+            ?: manager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+            ?: manager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         if (manager == null || sensor == null) {
             onDispose {}
         } else {
             val listener = object : SensorEventListener {
                 private var x = 0f
                 private var y = 0f
+                private val rotationMatrix = FloatArray(9)
+                private val orientation = FloatArray(3)
 
                 override fun onSensorChanged(event: SensorEvent) {
-                    val nextX = (-event.values[0] / 7.5f).coerceIn(-1f, 1f)
-                    val nextY = (event.values[1] / 7.5f).coerceIn(-1f, 1f)
+                    val (nextX, nextY) = if (
+                        event.sensor.type == Sensor.TYPE_GAME_ROTATION_VECTOR ||
+                        event.sensor.type == Sensor.TYPE_ROTATION_VECTOR
+                    ) {
+                        SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
+                        SensorManager.getOrientation(rotationMatrix, orientation)
+                        val roll = orientation[2]
+                        val pitch = orientation[1]
+                        (roll / 0.50f).coerceIn(-1f, 1f) to (-pitch / 0.62f).coerceIn(-1f, 1f)
+                    } else {
+                        (-event.values[0] / 7.5f).coerceIn(-1f, 1f) to
+                            (event.values[1] / 7.5f).coerceIn(-1f, 1f)
+                    }
                     x += (nextX - x) * 0.10f
                     y += (nextY - y) * 0.10f
                     offset = Offset(x, y)
@@ -170,6 +197,94 @@ private fun rememberDeviceParallax(): Offset {
     }
 
     return offset
+}
+
+private fun performDensePressHaptic(
+    view: android.view.View,
+    haptics: androidx.compose.ui.hapticfeedback.HapticFeedback
+) {
+    val handled = view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+    if (!handled) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+}
+
+private fun performSoftPulseHaptic(
+    view: android.view.View,
+    haptics: androidx.compose.ui.hapticfeedback.HapticFeedback
+) {
+    val handled = view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+    if (!handled) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+}
+
+@Composable
+private fun AmbientAudioLandscape(status: VpnStatus, enabled: Boolean) {
+    val latestStatus by rememberUpdatedState(status)
+
+    LaunchedEffect(enabled) {
+        if (!enabled) return@LaunchedEffect
+        withContext(Dispatchers.Default) {
+            val sampleRate = 16_000
+            val minBuffer = AudioTrack.getMinBufferSize(
+                sampleRate,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+            val bufferSize = maxOf(sampleRate / 2, minBuffer.takeIf { it > 0 } ?: sampleRate / 2)
+            val buffer = ShortArray(bufferSize / 2)
+            val track = runCatching {
+                AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setSampleRate(sampleRate)
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(bufferSize)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+            }.getOrNull() ?: return@withContext
+
+            var phase = 0f
+            var noise = 0x1D2C3B4A
+            runCatching {
+                track.setVolume(0f)
+                track.play()
+                while (currentCoroutineContext().isActive) {
+                    val current = latestStatus
+                    val active = current.isConnected || current.isBusy
+                    val latency = current.activeServer?.latencyMs?.coerceIn(40L, 420L) ?: 96L
+                    val load = current.trafficPulse.coerceIn(0f, 1f)
+                    val targetVolume = when {
+                        !active -> 0f
+                        current.phase == ConnectionPhase.ERROR -> 0.010f
+                        else -> 0.006f + load * 0.010f
+                    }
+                    val baseFrequency = when (current.phase) {
+                        ConnectionPhase.CONNECTED -> 92f + (420L - latency).toFloat() * 0.09f + load * 34f
+                        ConnectionPhase.ERROR -> 64f + sin(phase * 0.031f) * 10f
+                        else -> 132f + load * 26f
+                    }
+                    track.setVolume(targetVolume)
+                    for (index in buffer.indices) {
+                        noise = noise * 1_664_525 + 1_013_904_223
+                        val hiss = (((noise ushr 16) and 0xffff) / 32768f) - 1f
+                        val hum = sin(phase) * 0.64f + sin(phase * 2.01f + 0.7f) * 0.18f
+                        buffer[index] = ((hum + hiss * 0.11f) * 1800f).roundToInt().toShort()
+                        phase += (2f * PI.toFloat() * baseFrequency) / sampleRate
+                        if (phase > 2f * PI.toFloat()) phase -= 2f * PI.toFloat()
+                    }
+                    track.write(buffer, 0, buffer.size, AudioTrack.WRITE_BLOCKING)
+                }
+            }
+            track.release()
+        }
+    }
 }
 
 @Composable
@@ -197,10 +312,12 @@ fun LibertaApp(
     val surge = remember { Animatable(1f) }
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
+    val view = LocalView.current
     val tone = remember {
         runCatching { ToneGenerator(AudioManager.STREAM_MUSIC, 28) }.getOrNull()
     }
     val parallax = rememberDeviceParallax()
+    AmbientAudioLandscape(status, settings.labs.homeostasis)
 
     LaunchedEffect(surgeKey) {
         if (surgeKey > 0) {
@@ -215,10 +332,10 @@ fun LibertaApp(
 
     LaunchedEffect(status.phase) {
         if (status.phase == ConnectionPhase.CONNECTED) {
-            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            performSoftPulseHaptic(view, haptics)
             tone?.startTone(ToneGenerator.TONE_PROP_ACK, 64)
-            delay(120)
-            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            delay(96)
+            performSoftPulseHaptic(view, haptics)
             tone?.startTone(ToneGenerator.TONE_PROP_BEEP2, 42)
         } else if (status.phase == ConnectionPhase.ERROR) {
             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -245,7 +362,6 @@ fun LibertaApp(
                         onPower = { origin ->
                             surgeOrigin = origin
                             surgeKey += 1
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             tone?.startTone(ToneGenerator.TONE_PROP_BEEP, 46)
                             scope.launch {
                                 delay(130)
@@ -407,6 +523,8 @@ private fun HelpGratitudeRibbon(visible: Boolean, modifier: Modifier = Modifier)
 @Composable
 private fun PowerLens(status: VpnStatus, modifier: Modifier, onPower: (Offset) -> Unit) {
     val infinite = rememberInfiniteTransition(label = "power")
+    val haptics = LocalHapticFeedback.current
+    val view = LocalView.current
     val breathe by infinite.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
@@ -431,7 +549,10 @@ private fun PowerLens(status: VpnStatus, modifier: Modifier, onPower: (Offset) -
             .aspectRatio(1f)
             .onGloballyPositioned { rootTopLeft = it.localToRoot(Offset.Zero) }
             .pointerInput(status.phase) {
-                detectTapGestures { local -> onPower(rootTopLeft + local) }
+                detectTapGestures { local ->
+                    performDensePressHaptic(view, haptics)
+                    onPower(rootTopLeft + local)
+                }
             },
         contentAlignment = Alignment.Center
     ) {
@@ -642,8 +763,9 @@ private fun DockButton(
     val haptics = LocalHapticFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
+    var magnetSpot by remember { mutableStateOf<Offset?>(null) }
     val pressGlow by animateFloatAsState(
-        targetValue = if (pressed) 1f else 0f,
+        targetValue = if (pressed) 1f else if (magnetSpot != null) 0.62f else 0f,
         animationSpec = spring(dampingRatio = 0.58f, stiffness = 360f),
         label = "dockPressGlow"
     )
@@ -663,6 +785,21 @@ private fun DockButton(
                 scaleY = scale
             }
             .clip(RoundedCornerShape(22.dp))
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull()
+                        magnetSpot = when {
+                            change?.pressed == true -> change.position
+                            event.type == PointerEventType.Move || event.type == PointerEventType.Enter -> change?.position
+                            event.type == PointerEventType.Release || event.type == PointerEventType.Exit -> null
+                            else -> magnetSpot
+                        }
+                    }
+                }
+            }
             .clickable(
                 enabled = enabled,
                 interactionSource = interactionSource,
@@ -680,7 +817,8 @@ private fun DockButton(
                 enabled = enabled,
                 phase = phase,
                 cornerRadiusPx = 22.dp.toPx(),
-                press = pressGlow
+                press = pressGlow,
+                magnetSpot = magnetSpot
             )
         }
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
@@ -739,13 +877,20 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLensButtonSurfa
     enabled: Boolean,
     phase: Float,
     cornerRadiusPx: Float,
-    press: Float = 0f
+    press: Float = 0f,
+    magnetSpot: Offset? = null
 ) {
     val active = selected && enabled
+    val magneticCenter = magnetSpot?.let {
+        Offset(
+            it.x.coerceIn(size.width * 0.08f, size.width * 0.92f),
+            it.y.coerceIn(size.height * 0.12f, size.height * 0.88f)
+        )
+    }
     val center = Offset(
         size.width * (0.46f + sin(phase * 6.28f) * 0.035f + press * 0.10f),
         size.height * (0.48f - press * 0.08f)
-    )
+    ).let { animated -> magneticCenter?.let { animated + (it - animated) * (0.30f + press * 0.28f) } ?: animated }
     val radius = size.maxDimension * 0.94f
     drawRoundRect(
         brush = Brush.radialGradient(
@@ -755,7 +900,8 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLensButtonSurfa
                 Emerald.copy(alpha = if (active) 0.08f + press * 0.08f else 0.028f + press * 0.040f),
                 Color.White.copy(alpha = 0.035f)
             ),
-            center = Offset(size.width * 0.28f, size.height * 0.18f),
+            center = magneticCenter?.let { it + Offset(-size.width * 0.06f, -size.height * 0.18f) }
+                ?: Offset(size.width * 0.28f, size.height * 0.18f),
             radius = radius
         ),
         cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx)
@@ -772,15 +918,32 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLensButtonSurfa
         ),
         cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx)
     )
+    magneticCenter?.let { spot ->
+        drawCircle(
+            brush = Brush.radialGradient(
+                listOf(
+                    Color.White.copy(alpha = 0.30f * press),
+                    Azure.copy(alpha = 0.13f * press),
+                    Color.Transparent
+                ),
+                center = spot,
+                radius = size.minDimension * 1.15f
+            ),
+            radius = size.minDimension * 1.15f,
+            center = spot
+        )
+    }
     repeat(5) { index ->
         val y = size.height * (0.18f + index * 0.17f + sin(phase * 6.28f + index) * 0.025f)
+        val pullX = magneticCenter?.let { (it.x - size.width / 2f) * 0.14f } ?: 0f
+        val pullY = magneticCenter?.let { (it.y - size.height / 2f) * 0.05f } ?: 0f
         val path = Path().apply {
-            moveTo(size.width * -0.08f, y)
+            moveTo(size.width * -0.08f, y + pullY)
             cubicTo(
-                size.width * (0.24f + phase * 0.08f),
-                y - size.height * 0.18f,
-                size.width * (0.58f - phase * 0.05f),
-                y + size.height * 0.18f,
+                size.width * (0.24f + phase * 0.08f) + pullX,
+                y - size.height * (0.18f + press * 0.05f),
+                size.width * (0.58f - phase * 0.05f) + pullX * 1.5f,
+                y + size.height * (0.18f + press * 0.05f),
                 size.width * 1.08f,
                 y - size.height * 0.04f
             )
@@ -1091,10 +1254,11 @@ private fun SettingsScreen(
 
                 LabsSection(
                     title = "Стелс-джиттер и гомеостаз",
-                    description = "Адаптирует активность обфускации под экран, перегрев и качество сети.",
+                    description = "Адаптирует активность обфускации, дыхание интерфейса и тихий аудио-гул под качество сети.",
                     enabled = settings.labs.homeostasis,
                     onMasterChange = { checked -> onLabsChange { it.copy(homeostasis = checked) } }
                 ) { available ->
+                    SettingLine("Аудио-ландшафт", "Низкий гул зависит от ping и нагрузки", "Активен только при гомеостазе.")
                     ToggleLine("Адаптивная частота", "Снижает активность при выключенном экране.", settings.labs.adaptiveFrequency, { checked -> onLabsChange { it.copy(adaptiveFrequency = checked) } }, available)
                     ToggleLine("Умное переподключение", "Использует экспоненциальную задержку переподключений.", settings.labs.smartReconnect, { checked -> onLabsChange { it.copy(smartReconnect = checked) } }, available)
                     ToggleLine("Термозащита", "Переходит на легкие алгоритмы при перегреве.", settings.labs.thermalGuard, { checked -> onLabsChange { it.copy(thermalGuard = checked) } }, available)
@@ -1190,22 +1354,37 @@ private fun LivingBackground(
                 }
             }
     ) {
+        val accent = status.accent()
+        val pulse = status.trafficPulse
+        val livingTone = if (status.isConnected) 0.5f + 0.5f * sin(drift * 6.28f) else 0f
+        val errorBeat = status.errorBeat(drift)
+        val ambientMiddle = when (status.phase) {
+            ConnectionPhase.CONNECTED -> lerp(Azure, Emerald, livingTone * 0.72f).copy(alpha = 0.26f)
+            ConnectionPhase.ERROR -> lerp(Color(0xFFF4E7EA), Rose, errorBeat * 0.34f)
+            else -> Color(0xFFEAF2F7)
+        }
+        val ambientTail = when (status.phase) {
+            ConnectionPhase.CONNECTED -> lerp(Color(0xFFF9FBF8), Color(0xFFE7FFF6), livingTone)
+            ConnectionPhase.ERROR -> lerp(Color(0xFFFFF7F7), Color(0xFFFFE3E7), errorBeat)
+            else -> Color(0xFFF9FBF8)
+        }
         drawRect(
             Brush.linearGradient(
                 listOf(
                     Color(0xFFF8FBFD),
-                    Color(0xFFEAF2F7),
-                    Color(0xFFF9FBF8)
+                    ambientMiddle,
+                    ambientTail
                 )
             )
         )
-        val accent = status.accent()
-        val pulse = status.trafficPulse
-        val livingTone = if (status.isConnected) 0.5f + 0.5f * sin(drift * 6.28f) else 0f
         val parallaxLarge = Offset(parallax.x * size.width * 0.045f, parallax.y * size.height * 0.030f)
         val parallaxMedium = Offset(parallax.x * size.width * 0.025f, parallax.y * size.height * 0.018f)
         val parallaxSmall = Offset(parallax.x * size.width * 0.012f, parallax.y * size.height * 0.010f)
-        val orbAlpha = if (status.isConnected) 0.36f + pulse * 0.22f else 0.13f
+        val orbAlpha = when {
+            status.isConnected -> 0.36f + pulse * 0.22f + livingTone * 0.06f
+            status.phase == ConnectionPhase.ERROR -> 0.20f + errorBeat * 0.22f
+            else -> 0.13f
+        }
         val left = Offset(size.width * (0.18f + drift * 0.14f), size.height * 0.34f) + parallaxLarge
         val right = Offset(size.width * (0.82f - drift * 0.08f), size.height * 0.67f) - parallaxMedium
         drawCircle(
@@ -1222,7 +1401,14 @@ private fun LivingBackground(
             center = left
         )
         drawCircle(
-            brush = Brush.radialGradient(listOf(Gold.copy(alpha = 0.18f), Color.Transparent), right, size.maxDimension * 0.44f),
+            brush = Brush.radialGradient(
+                listOf(
+                    lerp(Gold, Emerald, livingTone).copy(alpha = 0.18f + livingTone * 0.08f),
+                    Color.Transparent
+                ),
+                right,
+                size.maxDimension * 0.44f
+            ),
             radius = size.maxDimension * 0.44f,
             center = right
         )
@@ -1246,8 +1432,17 @@ private fun LivingBackground(
             }
             drawPath(
                 path = path,
-                color = listOf(Azure, Emerald, Gold)[index % 3].copy(alpha = if (status.isConnected) 0.16f + pulse * 0.10f else 0.055f),
-                style = Stroke(width = (1.2f + index * 0.10f).dp.toPx(), cap = StrokeCap.Round)
+                color = listOf(Azure, Emerald, Gold, Rose)[index % 4].copy(
+                    alpha = when {
+                        status.phase == ConnectionPhase.ERROR -> 0.06f + errorBeat * 0.18f
+                        status.isConnected -> 0.16f + pulse * 0.10f
+                        else -> 0.055f
+                    }
+                ),
+                style = Stroke(
+                    width = (1.2f + index * 0.10f + if (status.phase == ConnectionPhase.ERROR) errorBeat * 1.2f else 0f).dp.toPx(),
+                    cap = StrokeCap.Round
+                )
             )
         }
         repeat(10) { index ->
@@ -1316,19 +1511,34 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawDataParticles(
     val active = status.isConnected || status.isBusy
     if (!active && status.trafficPulse < 0.05f) return
 
-    val density = (8 + status.trafficPulse * 18f + if (status.isBusy) 6f else 0f).roundToInt()
+    val load = status.trafficPulse.coerceIn(0f, 1f)
+    val density = (6 + load * 34f + if (status.isBusy) 8f else 0f).roundToInt()
     val start = Offset(size.width * 0.50f, size.height * 0.31f) +
         Offset(parallax.x * size.width * 0.020f, parallax.y * size.height * 0.014f)
-    val end = Offset(size.width * 0.50f, size.height * 0.72f)
-    repeat(density.coerceIn(4, 30)) { index ->
-        val localPhase = (phase * (0.75f + status.trafficPulse * 0.75f) + index / density.toFloat()) % 1f
+    val end = Offset(size.width * 0.50f, size.height * 0.74f)
+    repeat(density.coerceIn(4, 46)) { index ->
+        val lane = ((index % 7) - 3) / 3f
+        val localPhase = (phase * (0.86f + load * 1.24f) + index / density.toFloat()) % 1f
         val wave = sin((localPhase * 6.28f) + index * 1.7f)
-        val x = start.x + (end.x - start.x) * localPhase + wave * size.width * 0.035f
+        val x = start.x + (end.x - start.x) * localPhase + wave * size.width * (0.018f + load * 0.028f) +
+            lane * size.width * (0.010f + load * 0.018f)
         val y = start.y + (end.y - start.y) * localPhase
         val alpha = sin(localPhase * PI.toFloat()).coerceAtLeast(0f) *
-            (0.06f + status.trafficPulse * 0.18f + if (status.isBusy) 0.05f else 0f)
-        val particleRadius = (1.5f + status.trafficPulse * 2.4f + (index % 3) * 0.55f).dp.toPx()
+            (0.045f + load * 0.22f + if (status.isBusy) 0.05f else 0f)
+        val particleRadius = (1.1f + load * 2.8f + (index % 3) * 0.55f).dp.toPx()
         val color = listOf(Azure, Emerald, Gold)[index % 3]
+        val previous = Offset(
+            start.x + (end.x - start.x) * (localPhase - 0.045f) +
+                lane * size.width * (0.010f + load * 0.018f),
+            start.y + (end.y - start.y) * (localPhase - 0.045f)
+        )
+        drawLine(
+            color = color.copy(alpha = alpha * 0.52f),
+            start = previous,
+            end = Offset(x, y),
+            strokeWidth = particleRadius * (1.2f + load),
+            cap = StrokeCap.Round
+        )
         drawCircle(
             brush = Brush.radialGradient(
                 listOf(color.copy(alpha = alpha), Color.Transparent),
@@ -1729,6 +1939,13 @@ private fun VpnStatus.accent(): Color =
         ConnectionPhase.DISCONNECTED -> Gold
         else -> Azure
     }
+
+private fun VpnStatus.errorBeat(phase: Float): Float {
+    if (this.phase != ConnectionPhase.ERROR) return 0f
+    val primary = sin(phase * 6.28f * 1.7f).coerceAtLeast(0f)
+    val stutter = sin(phase * 6.28f * 4.9f + 0.7f).coerceAtLeast(0f) * 0.45f
+    return (primary + stutter).coerceIn(0f, 1f)
+}
 
 private fun Long.formatTime(): String =
     SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(Date(this))
