@@ -95,6 +95,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -392,6 +393,9 @@ fun LibertaApp(
                 meshEnabled = settings.labs.sovereignRelay,
                 surgeProgress = surge.value,
                 surgeOrigin = surgeOrigin,
+                fusionProgress = fusion.value,
+                fusionOrigin = fusionOrigin,
+                fusionTint = fusionAccent,
                 parallax = parallax,
                 touchProgress = touch.value,
                 touchOrigin = touchOrigin
@@ -519,7 +523,6 @@ private fun HomeScreen(
             onSettingsChange = onSettingsChange,
             onLabsChange = onLabsChange,
             onConnectionModePower = onConnectionModePower,
-            onFusionDrop = onFusionDrop,
             modifier = Modifier.align(Alignment.BottomCenter)
         )
     }
@@ -876,14 +879,11 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSphereBody(
     val highlightCenter = Offset(center.x - radius * 0.30f, center.y - radius * 0.36f)
     drawCircle(
         brush = Brush.radialGradient(
-            colors = listOf(
-                Color(0xFFF7FCFF).copy(alpha = 0.96f),
-                Color(0xFFE0EEF7).copy(alpha = 0.86f),
-                Color(0xFFB6CFE0).copy(alpha = 0.74f),
-                Color(0xFF6E8FA6).copy(alpha = 0.62f),
-                Color(0xFF3F5C77).copy(alpha = 0.48f)
-            ),
-            stops = listOf(0f, 0.30f, 0.60f, 0.86f, 1f),
+            0f to Color(0xFFF7FCFF).copy(alpha = 0.96f),
+            0.30f to Color(0xFFE0EEF7).copy(alpha = 0.86f),
+            0.60f to Color(0xFFB6CFE0).copy(alpha = 0.74f),
+            0.86f to Color(0xFF6E8FA6).copy(alpha = 0.62f),
+            1f to Color(0xFF3F5C77).copy(alpha = 0.48f),
             center = highlightCenter,
             radius = radius * 1.08f
         ),
@@ -966,13 +966,10 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFresnelRim(
 ) {
     drawCircle(
         brush = Brush.radialGradient(
-            colors = listOf(
-                Color.Transparent,
-                Color.Transparent,
-                Color.White.copy(alpha = 0.62f + traffic * 0.18f),
-                Color.White.copy(alpha = 0.10f)
-            ),
-            stops = listOf(0f, 0.84f, 0.96f, 1f),
+            0f to Color.Transparent,
+            0.84f to Color.Transparent,
+            0.96f to Color.White.copy(alpha = 0.62f + traffic * 0.18f),
+            1f to Color.White.copy(alpha = 0.10f),
             center = center,
             radius = radius
         ),
@@ -1188,6 +1185,8 @@ private fun DockButton(
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     var magnetSpot by remember { mutableStateOf<Offset?>(null) }
+    var rootCenter by remember { mutableStateOf(Offset.Zero) }
+    val dockShape = RoundedCornerShape(22.dp)
     val pressGlow by animateFloatAsState(
         targetValue = if (pressed) 1f else if (magnetSpot != null) 0.62f else 0f,
         animationSpec = spring(dampingRatio = 0.58f, stiffness = 360f),
@@ -1554,13 +1553,10 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLensCircleSurfa
 
     drawCircle(
         brush = Brush.radialGradient(
-            colors = listOf(
-                Color(0xFFF7FCFF).copy(alpha = if (active) 0.92f else 0.78f),
-                Color(0xFFE0EEF7).copy(alpha = if (active) 0.78f else 0.62f),
-                Color(0xFFB0CADC).copy(alpha = 0.62f),
-                Color(0xFF6E8FA6).copy(alpha = 0.50f)
-            ),
-            stops = listOf(0f, 0.40f, 0.78f, 1f),
+            0f to Color(0xFFF7FCFF).copy(alpha = if (active) 0.92f else 0.78f),
+            0.40f to Color(0xFFE0EEF7).copy(alpha = if (active) 0.78f else 0.62f),
+            0.78f to Color(0xFFB0CADC).copy(alpha = 0.62f),
+            1f to Color(0xFF6E8FA6).copy(alpha = 0.50f),
             center = highlightCenter,
             radius = radius * 1.10f
         ),
@@ -1626,13 +1622,10 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLensCircleSurfa
     )
     drawCircle(
         brush = Brush.radialGradient(
-            colors = listOf(
-                Color.Transparent,
-                Color.Transparent,
-                Color.White.copy(alpha = if (active) 0.78f else 0.56f),
-                Color.White.copy(alpha = 0.10f)
-            ),
-            stops = listOf(0f, 0.84f, 0.96f, 1f),
+            0f to Color.Transparent,
+            0.84f to Color.Transparent,
+            0.96f to Color.White.copy(alpha = if (active) 0.78f else 0.56f),
+            1f to Color.White.copy(alpha = 0.10f),
             center = center,
             radius = radius
         ),
@@ -1990,6 +1983,9 @@ private fun LivingBackground(
     meshEnabled: Boolean,
     surgeProgress: Float,
     surgeOrigin: Offset,
+    fusionProgress: Float,
+    fusionOrigin: Offset,
+    fusionTint: Color,
     parallax: Offset,
     touchProgress: Float,
     touchOrigin: Offset
@@ -2834,6 +2830,13 @@ private fun VpnStatus.networkFlowSpeed(): Float {
         ?: if (isBusy) 0.64f else 0.34f
     return (0.24f + latencyBoost * 0.42f + trafficPulse * 0.34f).coerceIn(0f, 1f)
 }
+
+private fun VpnStatus.errorBeat(phase: Float): Float =
+    if (this.phase == ConnectionPhase.ERROR) {
+        (0.5f + 0.5f * sin(phase * 6.28f * 2.2f)).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
 
 private fun Long.formatTime(): String =
     SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(Date(this))
