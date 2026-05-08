@@ -3,6 +3,7 @@ package com.liberta.vpn
 import com.liberta.vpn.data.ConnectionProfile
 import com.liberta.vpn.data.VlessParser
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
 import org.junit.Test
 import java.util.Base64
@@ -39,5 +40,14 @@ class VlessParserTest {
         assertEquals("ws", candidates[0].transport)
         assertEquals("/ws", candidates[0].path)
         assertEquals("grpc", candidates[1].transport)
+    }
+
+    @Test
+    fun rejectsLinksWithoutVlessUuid() {
+        val link = "vless://TelegramChannel@example.com:443?type=tcp&security=reality#bad"
+
+        val candidate = VlessParser.parseLink(link, ConnectionProfile.BLACKLISTS)
+
+        assertNull(candidate)
     }
 }

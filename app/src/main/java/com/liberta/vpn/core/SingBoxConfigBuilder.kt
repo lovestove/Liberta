@@ -7,6 +7,7 @@ import com.liberta.vpn.data.ServerCandidate
 class SingBoxConfigBuilder {
     fun build(selected: ServerCandidate, settings: LibertaSettings): String {
         val dnsServer = effectiveDnsServer(settings)
+        val dnsRules = dnsRules(selected)
         val mtu = effectiveMtu(settings)
         val profile = settings.profile
         val isWhitelists = profile == ConnectionProfile.WHITELISTS
@@ -35,9 +36,10 @@ class SingBoxConfigBuilder {
               "dns": {
                 "servers": [
                   ${dnsServer.remoteJson()},
-                  { "tag": "dns-direct", "address": "8.8.8.8", "detour": "direct", "strategy": "ipv4_only" }
+                  { "type": "local", "tag": "dns-direct", "detour": "direct", "strategy": "ipv4_only" }
                 ],
-                "final": "dns-remote"
+                $dnsRules
+                "final": "dns-direct"
               },
               "inbounds": [
                 $inbounds
@@ -61,6 +63,7 @@ class SingBoxConfigBuilder {
     private fun buildRouteRules(isWhitelists: Boolean, phantomCall: Boolean): String {
         val rules = mutableListOf<String>()
         rules.add("{ \"ip_cidr\": \"172.19.0.2/32\", \"port\": 53, \"action\": \"hijack-dns\" }")
+        rules.add("{ \"port\": 53, \"action\": \"hijack-dns\" }")
         rules.add("{ \"protocol\": \"dns\", \"action\": \"hijack-dns\" }")
         
         // Исключаем SIP/RTP для звонков (Phantom Call)
@@ -108,7 +111,9 @@ class SingBoxConfigBuilder {
             "\"server\": \"${escape(server.host)}\"",
             "\"server_port\": ${server.port}",
             "\"uuid\": \"${escape(server.uuid)}\"",
-            "\"packet_encoding\": \"xudp\""
+            "\"packet_encoding\": \"xudp\"",
+            "\"domain_resolver\": \"dns-direct\"",
+            "\"connect_timeout\": \"1200ms\""
         )
         server.flow?.takeIf { it.isNotBlank() }?.let { parts += "\"flow\": \"${escape(it)}\"" }
         if (server.security.equals("tls", true) || server.security.equals("reality", true)) {
@@ -157,6 +162,14 @@ class SingBoxConfigBuilder {
     private fun effectiveMtu(settings: LibertaSettings): Int =
         if (settings.autoMtu) 1280 else settings.mtu.coerceIn(1280, 9000)
 
+    private fun dnsRules(selected: ServerCandidate): String {
+        val host = selected.host.trim()
+        if (host.isBlank() || host.isIpLiteral()) return "\"rules\": [],"
+        return """"rules": [
+                  { "domain": ["${escape(host)}"], "action": "route", "server": "dns-direct", "strategy": "ipv4_only" }
+                ],"""
+    }
+
     private fun DnsEndpoint.remoteJson(): String {
         val escapedServer = escape(server)
         val host = dohHost
@@ -188,14 +201,18 @@ class SingBoxConfigBuilder {
     ) {
         companion object {
             fun doh(server: String, host: String): DnsEndpoint = DnsEndpoint(server, host)
+            fun tcp(server: String): DnsEndpoint = DnsEndpoint(server)
 
             fun forAddress(server: String): DnsEndpoint =
                 when (server) {
                     "1.1.1.1", "1.0.0.1" -> doh(server, "cloudflare-dns.com")
                     "8.8.8.8", "8.8.4.4" -> doh(server, "dns.google")
                     "94.140.14.14", "94.140.15.15" -> doh(server, "dns.adguard-dns.com")
-                    else -> DnsEndpoint(server)
+                    else -> tcp(server)
                 }
         }
     }
 }
+
+private fun String.isIpLiteral(): Boolean =
+    all { it.isDigit() || it == '.' } || contains(':')

@@ -9,6 +9,7 @@ import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.system.Os
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -32,6 +33,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.FileDescriptor
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.URL
 import kotlin.math.min
 
@@ -100,6 +102,7 @@ class LibertaVpnService : VpnService() {
     ) {
         connectJob?.cancel()
         connectJob = scope.launch {
+            val connectStartedMs = SystemClock.elapsedRealtime()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(NOTIFICATION_ID, buildNotification("Liberta запускается"), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             } else {
@@ -143,17 +146,33 @@ class LibertaVpnService : VpnService() {
                 val cached = container.subscriptionRepository.cached(profile)
                 val refreshIntervalMs = settings.autoRefreshIntervalMinutes.coerceIn(5, 10_080) * 60L * 1_000L
                 val cacheIsStale = cached == null || System.currentTimeMillis() - cached.lastUpdatedEpochMs >= refreshIntervalMs
-                val refresh = forceRefresh || (settings.autoRefresh && cacheIsStale)
+                val useFastCache = cached != null && !forceRefresh
 
-                LibertaRuntime.update(ConnectionPhase.REFRESHING, settings.connectionMethod, profile, "Обновление подписки")
-                val primarySnapshot = container.subscriptionRepository.load(profile, forceRefresh = refresh)
+                LibertaRuntime.update(
+                    ConnectionPhase.REFRESHING,
+                    settings.connectionMethod,
+                    profile,
+                    if (useFastCache) "Быстрый старт из кеша" else "Обновление подписки"
+                )
+                val primarySnapshot = if (useFastCache) {
+                    cached
+                } else {
+                    val refresh = forceRefresh || (settings.autoRefresh && cacheIsStale)
+                    container.subscriptionRepository.load(profile, forceRefresh = refresh)
+                }
                 val snapshot = if (primarySnapshot.candidates.isEmpty() && profile == ConnectionProfile.WHITELISTS) {
                     Log.w("LibertaVpnService", "profile=WHITELISTS has no VLESS endpoints, using free transport pool")
-                    container.subscriptionRepository.load(ConnectionProfile.BLACKLISTS, forceRefresh = true)
+                    container.subscriptionRepository.cached(ConnectionProfile.BLACKLISTS)
+                        ?.takeIf { !forceRefresh }
+                        ?: container.subscriptionRepository.load(ConnectionProfile.BLACKLISTS, forceRefresh = true)
                 } else {
                     primarySnapshot
                 }
                 if (snapshot.candidates.isEmpty()) error("Подписка не содержит VLESS серверов")
+                Log.i(
+                    "LibertaVpnService",
+                    "phase=subscription_ready profile=$profile from_cache=${snapshot.fromCache} candidates=${snapshot.candidates.size} elapsed_ms=${SystemClock.elapsedRealtime() - connectStartedMs}"
+                )
 
                 LibertaRuntime.update(
                     ConnectionPhase.RACING,
@@ -163,65 +182,121 @@ class LibertaVpnService : VpnService() {
                     lastUpdatedEpochMs = snapshot.lastUpdatedEpochMs
                 )
                 val prioritizedCandidates = container.workingServersRepository.prioritize(profile, snapshot.candidates)
-                val racing = container.serverRacer.race(prioritizedCandidates)
-                val attempts = racing.tested
-                    .filter { it.latencyMs != null }
-                    .sortedBy { it.latencyMs }
-                    .take(CONNECT_ATTEMPT_LIMIT)
-                if (attempts.isEmpty()) error(racing.error ?: "Не удалось выбрать сервер")
-
+                val priorityRank = prioritizedCandidates.mapIndexed { index, candidate -> candidate.id to index }.toMap()
                 var connected = false
-                var lastError = racing.error
-                for ((index, selected) in attempts.withIndex()) {
-                    LibertaRuntime.update(
-                        ConnectionPhase.CONNECTING,
-                        settings.connectionMethod,
-                        profile,
-                        "Подключение ${index + 1}/${attempts.size}",
-                        activeServer = selected,
-                        lastUpdatedEpochMs = snapshot.lastUpdatedEpochMs
-                    )
-                    val config = container.configBuilder.build(selected, settings)
-                    val validation = container.coreEngine.validateConfig(config)
-                    if (!validation.ok) {
-                        lastError = validation.message
-                        continue
-                    }
-
-                    val tunFd = establishTun(settings, selected)
-                    val start = container.coreEngine.start(
-                        configJson = config,
-                        tunFd = tunFd,
-                        cacheDir = cacheDir,
-                        protect = { fd -> protect(fd) }
-                    )
-                    if (!start.ok) {
-                        closeDetachedFd(tunFd)
-                        lastError = start.message
-                        continue
-                    }
-                    detachedTunFd = tunFd
-                    
-                    // Даем системе время применить маршруты
-                    delay(500)
-
-                    val processInternetOk = probeInternet()
-                    LibertaRuntime.update(
-                        ConnectionPhase.CONNECTED,
-                        settings.connectionMethod,
-                        profile,
-                        "VPN активен; системный трафик направлен в TUN",
-                        activeServer = selected,
-                        lastUpdatedEpochMs = snapshot.lastUpdatedEpochMs,
-                        error = if (processInternetOk) null else "Процесс приложения исключен из VPN; нужна внешняя проверка трафика"
-                    )
+                var lastError: String? = null
+                val warmAttempts = if (!forceRefresh && snapshot.fromCache) {
+                    container.workingServersRepository.remembered(profile, snapshot.candidates).take(CONNECT_ATTEMPT_LIMIT)
+                } else {
+                    emptyList()
+                }
+                if (warmAttempts.isNotEmpty()) {
                     Log.i(
                         "LibertaVpnService",
-                        "phase=tunnel_validation selected=${selected.endpoint} process_online=$processInternetOk app_uid_excluded=true"
+                        "phase=warm_attempts_ready attempts=${warmAttempts.size} elapsed_ms=${SystemClock.elapsedRealtime() - connectStartedMs}"
                     )
-                    container.workingServersRepository.rememberWorking(selected)
-                    connected = true
-                    break
+                }
+
+                suspend fun racedAttempts(excludedIds: Set<String>): List<ServerCandidate> {
+                    val racingInput = prioritizedCandidates.filterNot { excludedIds.contains(it.id) }
+                    if (racingInput.isEmpty()) return emptyList()
+                    val racing = container.serverRacer.race(racingInput)
+                    lastError = racing.error
+                    val attempts = racing.tested
+                        .filter { it.latencyMs != null }
+                        .sortedWith(
+                            compareBy<ServerCandidate> { priorityRank[it.id] ?: Int.MAX_VALUE }
+                                .thenBy { if (it.host.isIpLiteral()) 0 else 1 }
+                                .thenBy { if (it.port == 443) 0 else 1 }
+                                .thenBy { it.latencyMs }
+                        )
+                        .take(CONNECT_ATTEMPT_LIMIT)
+                    Log.i(
+                        "LibertaVpnService",
+                        "phase=racing_ready tested=${racing.tested.size} attempts=${attempts.size} elapsed_ms=${SystemClock.elapsedRealtime() - connectStartedMs}"
+                    )
+                    return attempts
+                }
+
+                suspend fun tryAttempts(attempts: List<ServerCandidate>): Boolean {
+                    for ((index, selected) in attempts.withIndex()) {
+                        LibertaRuntime.update(
+                            ConnectionPhase.CONNECTING,
+                            settings.connectionMethod,
+                            profile,
+                            "Подключение ${index + 1}/${attempts.size}",
+                            activeServer = selected,
+                            lastUpdatedEpochMs = snapshot.lastUpdatedEpochMs
+                        )
+                        val selectedForCore = selected.withResolvedHostForCore()
+                        val config = container.configBuilder.build(selectedForCore, settings)
+                        val validation = container.coreEngine.validateConfig(config)
+                        if (!validation.ok) {
+                            lastError = validation.message
+                            continue
+                        }
+
+                        val tunFd = establishTun(settings, selectedForCore)
+                        val start = container.coreEngine.start(
+                            configJson = config,
+                            tunFd = tunFd,
+                            cacheDir = cacheDir,
+                            protect = { fd -> protect(fd) }
+                        )
+                        if (!start.ok) {
+                            closeDetachedFd(tunFd)
+                            lastError = start.message
+                            continue
+                        }
+                        detachedTunFd = tunFd
+
+                        // Даем системе время применить маршруты
+                        delay(250)
+
+                        val vpnInternetOk = probeInternet()
+                        Log.i(
+                            "LibertaVpnService",
+                            "phase=tunnel_validation selected=${selected.endpoint} vpn_online=$vpnInternetOk elapsed_ms=${SystemClock.elapsedRealtime() - connectStartedMs}"
+                        )
+                        if (!vpnInternetOk) {
+                            lastError = "Сервер ${selected.endpoint} не прошел интернет-проверку через VPN"
+                            LibertaRuntime.update(
+                                ConnectionPhase.CONNECTING,
+                                settings.connectionMethod,
+                                profile,
+                                "Сервер ${index + 1}/${attempts.size} не прошел интернет-проверку",
+                                activeServer = selectedForCore,
+                                lastUpdatedEpochMs = snapshot.lastUpdatedEpochMs,
+                                error = lastError
+                            )
+                            stopCoreOnly()
+                            delay(150)
+                            continue
+                        }
+                        LibertaRuntime.update(
+                            ConnectionPhase.CONNECTED,
+                            settings.connectionMethod,
+                            profile,
+                            "VPN активен; системный трафик направлен в TUN",
+                            activeServer = selectedForCore,
+                            lastUpdatedEpochMs = snapshot.lastUpdatedEpochMs,
+                            error = null
+                        )
+                        container.workingServersRepository.rememberWorking(selectedForCore)
+                        Log.i(
+                            "LibertaVpnService",
+                            "phase=connect_ready selected=${selectedForCore.endpoint} elapsed_ms=${SystemClock.elapsedRealtime() - connectStartedMs}"
+                        )
+                        return true
+                    }
+                    return false
+                }
+
+                val initialAttempts = warmAttempts.ifEmpty { racedAttempts(emptySet()) }
+                if (initialAttempts.isEmpty()) error(lastError ?: "Не удалось выбрать сервер")
+                connected = tryAttempts(initialAttempts)
+                if (!connected && warmAttempts.isNotEmpty()) {
+                    connected = tryAttempts(racedAttempts(warmAttempts.mapTo(mutableSetOf()) { it.id }))
                 }
                 if (!connected) error(lastError ?: "Не удалось запустить рабочий туннель")
                 startTrafficMonitor()
@@ -289,10 +364,6 @@ class LibertaVpnService : VpnService() {
             // builder.setBlocking(true) // Это может вызвать проблемы на некоторых устройствах, лучше использовать маршруты
         }
 
-        // libbox runs inside this process; keeping the app outside the VPN avoids proxying
-        // the core's own VLESS socket back into the TUN.
-        runCatching { builder.addDisallowedApplication(packageName) }
-
         val descriptor = builder.establish() ?: error("Android не выдал TUN интерфейс")
         return descriptor.detachFd()
     }
@@ -301,13 +372,13 @@ class LibertaVpnService : VpnService() {
         HEALTH_PROBES.any { endpoint ->
             runCatching {
                 val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 5_000
-                    readTimeout = 5_000
+                    connectTimeout = 3_000
+                    readTimeout = 3_000
                     requestMethod = "GET"
                     setRequestProperty("User-Agent", "Liberta/0.1 Android")
                 }
                 try {
-                    val healthy = connection.responseCode in 200..399
+                    val healthy = connection.responseCode in 200..499
                     Log.i("LibertaVpnService", "phase=tunnel_validation endpoint=$endpoint online=$healthy code=${connection.responseCode}")
                     healthy
                 } finally {
@@ -397,17 +468,31 @@ class LibertaVpnService : VpnService() {
 
         private const val CHANNEL_ID = "liberta_vpn"
         private const val NOTIFICATION_ID = 1001
-        private const val CONNECT_ATTEMPT_LIMIT = 6
+        private const val CONNECT_ATTEMPT_LIMIT = 4
         private val HEALTH_PROBES = listOf(
-            "http://connectivitycheck.gstatic.com/generate_204",
             "http://cp.cloudflare.com/generate_204",
-            "https://www.google.com/generate_204",
-            "https://connectivitycheck.gstatic.com/generate_204",
-            "https://cloudflare.com/cdn-cgi/trace"
+            "http://connectivitycheck.gstatic.com/generate_204"
         )
     }
 }
 
 private fun Intent.optionalBooleanExtra(name: String): Boolean? =
     if (hasExtra(name)) getBooleanExtra(name, false) else null
+
+private suspend fun ServerCandidate.withResolvedHostForCore(): ServerCandidate =
+    if (host.isIpLiteral()) {
+        this
+    } else {
+        withContext(Dispatchers.IO) {
+            val resolved = runCatching {
+                InetAddress.getAllByName(host)
+                    .firstOrNull { address -> address.hostAddress?.contains(':') == false }
+                    ?.hostAddress
+            }.getOrNull()
+            resolved?.let { copy(host = it, sni = sni ?: host) } ?: this@withResolvedHostForCore
+        }
+    }
+
+private fun String.isIpLiteral(): Boolean =
+    all { it.isDigit() || it == '.' } || contains(':')
 

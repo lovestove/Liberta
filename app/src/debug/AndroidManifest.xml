@@ -1,0 +1,16 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name=".DebugVpnPermissionActivity"
+            android:exported="true" />
+
+        <receiver
+            android:name=".DebugVpnControlReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.liberta.vpn.debug.CONNECT" />
+                <action android:name="com.liberta.vpn.debug.DISCONNECT" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

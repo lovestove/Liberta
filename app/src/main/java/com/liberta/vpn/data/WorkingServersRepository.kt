@@ -21,6 +21,16 @@ class WorkingServersRepository(private val context: Context) {
             (prioritizedRemembered + rest).distinctBy { it.id }
         }
 
+    suspend fun remembered(profile: ConnectionProfile, candidates: List<ServerCandidate>): List<ServerCandidate> =
+        withContext(Dispatchers.IO) {
+            if (candidates.isEmpty()) return@withContext emptyList()
+            val remembered = load(profile)
+            if (remembered.isEmpty()) return@withContext emptyList()
+
+            val candidateIds = candidates.mapTo(LinkedHashSet()) { it.id }
+            remembered.filter { candidateIds.contains(it.id) }.distinctBy { it.id }
+        }
+
     suspend fun rememberWorking(server: ServerCandidate) = withContext(Dispatchers.IO) {
         val existing = load(server.profile)
         val updated = (listOf(server) + existing.filterNot { it.id == server.id })

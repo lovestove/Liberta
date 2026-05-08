@@ -6,6 +6,9 @@ import java.security.MessageDigest
 import java.util.Base64
 
 object VlessParser {
+    private val UuidPattern =
+        Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
     fun parseSubscription(content: String, profile: ConnectionProfile): List<ServerCandidate> {
         val direct = parseLines(content, profile)
         if (direct.isNotEmpty()) return direct
@@ -28,7 +31,8 @@ object VlessParser {
         val atIndex = authority.indexOf('@')
         if (atIndex <= 0 || atIndex == authority.lastIndex) return null
 
-        val uuid = authority.substring(0, atIndex)
+        val uuid = decodeUrl(authority.substring(0, atIndex))
+        if (!UuidPattern.matches(uuid)) return null
         val hostPort = authority.substring(atIndex + 1)
         val host: String
         val port: Int

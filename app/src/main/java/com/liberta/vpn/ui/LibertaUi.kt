@@ -2144,7 +2144,7 @@ private fun LivingBackground(
         if (fusionProgress < 1f) {
             val origin = if (fusionOrigin == Offset.Zero) Offset(size.width / 2f, size.height * 0.86f) else fusionOrigin
             val maxRadius = size.maxDimension * 1.18f
-            val curRadius = maxRadius * fusionProgress
+            val curRadius = (maxRadius * fusionProgress).coerceAtLeast(1f)
             val fade = (1f - fusionProgress).coerceAtLeast(0f)
             drawCircle(
                 brush = Brush.radialGradient(

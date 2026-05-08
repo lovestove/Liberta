@@ -75,6 +75,21 @@ class LibertaViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             val activeProfile = settings.value.profile
             val activeMethod = settings.value.connectionMethod
+            if (!forceRefresh) {
+                val snapshots = ConnectionProfile.entries.mapNotNull { profile ->
+                    container.subscriptionRepository.cached(profile)
+                }
+                val total = snapshots.sumOf { it.candidates.size }
+                val lastUpdated = snapshots.maxOfOrNull { it.lastUpdatedEpochMs } ?: 0L
+                LibertaRuntime.update(
+                    ConnectionPhase.DISCONNECTED,
+                    connectionMethod = activeMethod,
+                    profile = activeProfile,
+                    message = if (total > 0) "Кеш готов: $total серверов" else "Готов к подключению",
+                    lastUpdatedEpochMs = lastUpdated.takeIf { it > 0L }
+                )
+                return@launch
+            }
             LibertaRuntime.update(
                 ConnectionPhase.REFRESHING,
                 connectionMethod = activeMethod,
