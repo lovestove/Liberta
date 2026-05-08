@@ -1,6 +1,5 @@
 package com.liberta.vpn.core
 
-import com.liberta.vpn.data.ConnectionProfile
 import com.liberta.vpn.data.LibertaSettings
 import com.liberta.vpn.data.ServerCandidate
 
@@ -9,8 +8,6 @@ class SingBoxConfigBuilder {
         val dnsServer = effectiveDnsServer(settings)
         val dnsRules = dnsRules(selected)
         val mtu = effectiveMtu(settings)
-        val profile = settings.profile
-        val isWhitelists = profile == ConnectionProfile.WHITELISTS
         
         val inbounds = buildList {
             add(tunInbound(mtu, settings.ipv6Enabled))
@@ -28,7 +25,7 @@ class SingBoxConfigBuilder {
             }
         }.joinToString(",\n")
         
-        val routeRules = buildRouteRules(isWhitelists, settings.labs.phantomCall)
+        val routeRules = buildRouteRules(settings.labs.phantomCall)
 
         return """
             {
@@ -36,7 +33,7 @@ class SingBoxConfigBuilder {
               "dns": {
                 "servers": [
                   ${dnsServer.remoteJson()},
-                  { "type": "local", "tag": "dns-direct", "detour": "direct", "strategy": "ipv4_only" }
+                  { "type": "tcp", "tag": "dns-direct", "server": "8.8.8.8", "server_port": 53 }
                 ],
                 $dnsRules
                 "final": "dns-direct"
@@ -60,11 +57,9 @@ class SingBoxConfigBuilder {
         """.trimIndent()
     }
     
-    private fun buildRouteRules(isWhitelists: Boolean, phantomCall: Boolean): String {
+    private fun buildRouteRules(phantomCall: Boolean): String {
         val rules = mutableListOf<String>()
         rules.add("{ \"ip_cidr\": \"172.19.0.2/32\", \"port\": 53, \"action\": \"hijack-dns\" }")
-        rules.add("{ \"port\": 53, \"action\": \"hijack-dns\" }")
-        rules.add("{ \"protocol\": \"dns\", \"action\": \"hijack-dns\" }")
         
         // Исключаем SIP/RTP для звонков (Phantom Call)
         if (phantomCall) {
@@ -73,14 +68,7 @@ class SingBoxConfigBuilder {
             rules.add("{ \"network\": \"tcp\", \"port\": [5060, 5061], \"action\": \"route\", \"outbound\": \"direct\" }")
         }
         
-        if (isWhitelists) {
-            // Белые списки: российские сайты идут напрямую, остальное через VPN
-            rules.add("{ \"domain_suffix\": [\".ru\", \".рф\", \".su\", \"yandex.ru\", \"vk.com\", \"mail.ru\", \"sberbank.ru\", \"gosuslugi.ru\", \"rutube.ru\", \"kinopoisk.ru\"], \"action\": \"route\", \"outbound\": \"direct\" }")
-            rules.add("{ \"ip_cidr\": [\"10.0.0.0/8\", \"172.16.0.0/12\", \"192.168.0.0/16\", \"127.0.0.0/8\", \"100.64.0.0/10\", \"169.254.0.0/16\", \"224.0.0.0/4\"], \"action\": \"route\", \"outbound\": \"direct\" }")
-        } else {
-            // Черные списки: локальные адреса идут напрямую, остальное через VPN
-            rules.add("{ \"ip_cidr\": [\"10.0.0.0/8\", \"172.16.0.0/12\", \"192.168.0.0/16\", \"127.0.0.0/8\", \"100.64.0.0/10\", \"169.254.0.0/16\", \"224.0.0.0/4\"], \"action\": \"route\", \"outbound\": \"direct\" }")
-        }
+        rules.add("{ \"ip_cidr\": [\"10.0.0.0/8\", \"172.16.0.0/12\", \"192.168.0.0/16\", \"127.0.0.0/8\", \"100.64.0.0/10\", \"169.254.0.0/16\", \"224.0.0.0/4\"], \"action\": \"route\", \"outbound\": \"direct\" }")
         
         return rules.joinToString(",\n                  ")
     }

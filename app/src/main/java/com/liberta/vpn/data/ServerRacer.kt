@@ -10,8 +10,8 @@ import java.net.Socket
 import kotlin.system.measureTimeMillis
 
 class ServerRacer(
-    private val timeoutMs: Int = 650,
-    private val maxCandidates: Int = 12
+    private val timeoutMs: Int = 900,
+    private val maxCandidates: Int = 48
 ) {
     suspend fun race(candidates: List<ServerCandidate>): RacingResult = coroutineScope {
         val eligible = candidates

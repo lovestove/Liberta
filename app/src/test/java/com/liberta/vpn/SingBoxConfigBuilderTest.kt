@@ -6,6 +6,8 @@ import com.liberta.vpn.data.DnsProvider
 import com.liberta.vpn.data.LabSettings
 import com.liberta.vpn.data.LibertaSettings
 import com.liberta.vpn.data.ServerCandidate
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -20,7 +22,7 @@ class SingBoxConfigBuilderTest {
         assertTrue(json.contains("\"final\": \"proxy\""))
         assertTrue(json.contains("\"final\": \"dns-direct\""))
         assertTrue(json.contains("\"type\": \"https\""))
-        assertTrue(json.contains("\"type\": \"local\""))
+        assertTrue(json.contains("\"tag\": \"dns-direct\""))
         assertTrue(json.contains("\"server_name\": \"cloudflare-dns.com\""))
         assertTrue(json.contains("\"path\": \"/dns-query\""))
         assertTrue(json.contains("\"detour\": \"proxy\""))
@@ -84,10 +86,25 @@ class SingBoxConfigBuilderTest {
         assertTrue(json.contains("\"outbound\": \"direct\""))
     }
 
-    private fun testCandidate(): ServerCandidate =
+    @Test
+    fun whitelistAndBlacklistProfilesUseSameRoutingMechanics() {
+        val blackJson = SingBoxConfigBuilder().build(
+            testCandidate(ConnectionProfile.BLACKLISTS),
+            LibertaSettings(profile = ConnectionProfile.BLACKLISTS)
+        )
+        val whiteJson = SingBoxConfigBuilder().build(
+            testCandidate(ConnectionProfile.WHITELISTS),
+            LibertaSettings(profile = ConnectionProfile.WHITELISTS)
+        )
+
+        assertFalse(whiteJson.contains("\"domain_suffix\""))
+        assertEquals(extractRouteBlock(blackJson), extractRouteBlock(whiteJson))
+    }
+
+    private fun testCandidate(profile: ConnectionProfile = ConnectionProfile.BLACKLISTS): ServerCandidate =
         ServerCandidate(
             id = "id",
-            profile = ConnectionProfile.BLACKLISTS,
+            profile = profile,
             rawLink = "vless://raw",
             uuid = "00000000-0000-0000-0000-000000000000",
             host = "vpn.example",
@@ -101,4 +118,7 @@ class SingBoxConfigBuilderTest {
             publicKey = "public-key",
             shortId = "abcd"
         )
+
+    private fun extractRouteBlock(json: String): String =
+        json.substringAfter("\"route\": {").substringBefore("\"auto_detect_interface\"")
 }

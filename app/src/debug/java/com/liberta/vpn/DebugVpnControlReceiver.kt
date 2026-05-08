@@ -25,6 +25,9 @@ class DebugVpnControlReceiver : BroadcastReceiver() {
             putExtra(LibertaVpnService.EXTRA_METHOD, method.name)
             putExtra(LibertaVpnService.EXTRA_PROFILE, profile.name)
             putExtra(LibertaVpnService.EXTRA_FORCE_REFRESH, intent.getBooleanExtra(EXTRA_FORCE_REFRESH, false))
+            if (intent.hasExtra(EXTRA_PHANTOM_CALL)) {
+                putExtra(LibertaVpnService.EXTRA_PHANTOM_CALL, intent.getBooleanExtra(EXTRA_PHANTOM_CALL, false))
+            }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(serviceIntent)
@@ -39,5 +42,6 @@ class DebugVpnControlReceiver : BroadcastReceiver() {
         const val EXTRA_METHOD = "method"
         const val EXTRA_PROFILE = "profile"
         const val EXTRA_FORCE_REFRESH = "force_refresh"
+        const val EXTRA_PHANTOM_CALL = "phantom_call"
     }
 }

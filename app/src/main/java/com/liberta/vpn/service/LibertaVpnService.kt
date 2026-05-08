@@ -160,14 +160,7 @@ class LibertaVpnService : VpnService() {
                     val refresh = forceRefresh || (settings.autoRefresh && cacheIsStale)
                     container.subscriptionRepository.load(profile, forceRefresh = refresh)
                 }
-                val snapshot = if (primarySnapshot.candidates.isEmpty() && profile == ConnectionProfile.WHITELISTS) {
-                    Log.w("LibertaVpnService", "profile=WHITELISTS has no VLESS endpoints, using free transport pool")
-                    container.subscriptionRepository.cached(ConnectionProfile.BLACKLISTS)
-                        ?.takeIf { !forceRefresh }
-                        ?: container.subscriptionRepository.load(ConnectionProfile.BLACKLISTS, forceRefresh = true)
-                } else {
-                    primarySnapshot
-                }
+                val snapshot = primarySnapshot
                 if (snapshot.candidates.isEmpty()) error("Подписка не содержит VLESS серверов")
                 Log.i(
                     "LibertaVpnService",
@@ -205,10 +198,10 @@ class LibertaVpnService : VpnService() {
                     val attempts = racing.tested
                         .filter { it.latencyMs != null }
                         .sortedWith(
-                            compareBy<ServerCandidate> { priorityRank[it.id] ?: Int.MAX_VALUE }
-                                .thenBy { if (it.host.isIpLiteral()) 0 else 1 }
-                                .thenBy { if (it.port == 443) 0 else 1 }
+                            compareBy<ServerCandidate> { if (it.port == 443) 0 else 1 }
                                 .thenBy { it.latencyMs }
+                                .thenBy { if (it.host.isIpLiteral()) 0 else 1 }
+                                .thenBy { priorityRank[it.id] ?: Int.MAX_VALUE }
                         )
                         .take(CONNECT_ATTEMPT_LIMIT)
                     Log.i(
@@ -468,7 +461,7 @@ class LibertaVpnService : VpnService() {
 
         private const val CHANNEL_ID = "liberta_vpn"
         private const val NOTIFICATION_ID = 1001
-        private const val CONNECT_ATTEMPT_LIMIT = 4
+        private const val CONNECT_ATTEMPT_LIMIT = 8
         private val HEALTH_PROBES = listOf(
             "http://cp.cloudflare.com/generate_204",
             "http://connectivitycheck.gstatic.com/generate_204"
