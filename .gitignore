@@ -8,3 +8,5 @@ local.properties
 *.aab
 *.iml
 .idea/
+gradle-8.13/
+gradle-8.13-bin.zip
