@@ -284,11 +284,6 @@ class LibertaVpnService : VpnService() {
             builder.setMetered(false)
         }
 
-        // Блокируем трафик до полной готовности туннеля
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && settings.killSwitch) {
-            // builder.setBlocking(true) // Это может вызвать проблемы на некоторых устройствах, лучше использовать маршруты
-        }
-
         // libbox runs inside this process; keeping the app outside the VPN avoids proxying
         // the core's own VLESS socket back into the TUN.
         runCatching { builder.addDisallowedApplication(packageName) }
