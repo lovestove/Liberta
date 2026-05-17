@@ -1,0 +1,3 @@
+## 2026-05-17 - Improve Accessibility for Toggle Settings
+**Learning:** Using `Modifier.toggleable` on a parent row for switch settings significantly improves the tap target size and ensures proper semantic announcement for screen readers. A crucial detail is setting `onCheckedChange = null` on the inner `Switch` component to avoid double-firing events and duplicate semantic nodes.
+**Action:** When creating row-based settings with switches in Jetpack Compose, prefer placing `Modifier.toggleable` on the container `Row` and disable the internal `Switch` events.
