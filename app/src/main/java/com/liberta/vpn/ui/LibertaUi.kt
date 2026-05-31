@@ -105,6 +105,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
@@ -2435,7 +2437,7 @@ private fun SettingLine(label: String, value: String, help: String) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(label, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             Text(value, color = TextSecondary, fontSize = 14.sp, textAlign = TextAlign.End)
-            Icon(Icons.Rounded.Info, contentDescription = help, tint = Muted, modifier = Modifier.padding(start = 8.dp).size(17.dp))
+            Icon(Icons.Rounded.Info, contentDescription = null, tint = Muted, modifier = Modifier.padding(start = 8.dp).size(17.dp))
         }
         Text(help, color = Muted, fontSize = 11.sp, lineHeight = 14.sp, modifier = Modifier.padding(top = 3.dp))
     }
@@ -2449,17 +2451,29 @@ private fun ToggleLine(
     onChecked: (Boolean) -> Unit,
     enabled: Boolean = true
 ) {
-    Row(Modifier.fillMaxWidth().padding(top = 10.dp).alpha(if (enabled) 1f else 0.42f), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+            .alpha(if (enabled) 1f else 0.42f)
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = Role.Switch,
+                onValueChange = onChecked
+            ),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(label, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Icon(Icons.Rounded.Info, contentDescription = help, tint = Muted, modifier = Modifier.padding(start = 6.dp).size(16.dp))
+                Icon(Icons.Rounded.Info, contentDescription = null, tint = Muted, modifier = Modifier.padding(start = 6.dp).size(16.dp))
             }
             Text(help, color = Muted, fontSize = 11.sp, lineHeight = 14.sp)
         }
         Switch(
             checked = checked,
-            onCheckedChange = onChecked,
+            onCheckedChange = null,
             enabled = enabled,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = Color.White,
