@@ -1,0 +1,3 @@
+## 2024-05-18 - Clickable Switch Rows
+**Learning:** In Jetpack Compose, when adding a switch to a row with a label, applying `Modifier.clickable` directly is an anti-pattern. Setting `Modifier.toggleable(value = ..., role = Role.Switch, onValueChange = ...)` on the parent `Row` correctly merges accessibility semantics (announcing it as a switch to screen readers) while making the entire row interactive. Ensure the internal `Switch` component's `onCheckedChange` is set to `null` to avoid duplicate firing and a11y overlap.
+**Action:** Always use `Modifier.toggleable` with `Role.Switch` on parent containers of toggle controls instead of simple `clickable` modifiers.
