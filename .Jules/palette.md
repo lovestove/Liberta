@@ -1,0 +1,3 @@
+## 2024-05-19 - Semantic merging for switch rows in Jetpack Compose
+**Learning:** Using `Modifier.clickable` or just placing a `Switch` in a `Row` breaks screen reader semantics, often causing elements to be announced twice or separated. Also, placing an informative icon next to descriptive text with its own `contentDescription` leads to redundant announcements.
+**Action:** Use `Modifier.toggleable(value = ..., role = Role.Switch, onValueChange = ...)` on the parent `Row` and set the internal `Switch`'s `onCheckedChange` to `null`. Remove `contentDescription` on purely decorative or redundantly informative icons alongside text.
