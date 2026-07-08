@@ -1,0 +1,3 @@
+## 2023-10-27 - Double Announcements with Switch Icons
+**Learning:** When adding `contentDescription` to an `Icon` that sits next to descriptive text for a setting, screen readers will announce the text twice (once for the text, once for the icon). Furthermore, when making a setting row toggleable, the entire row must handle the interaction, not just the switch, to increase touch target size and merge semantics correctly.
+**Action:** Use `Modifier.toggleable` on parent rows containing switches, assign `Role.Switch`, set the inner `Switch`'s `onCheckedChange` to null, and use `contentDescription = null` on purely decorative icons next to text.
