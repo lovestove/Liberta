@@ -28,6 +28,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -1248,6 +1250,7 @@ private fun DockButton(
                 enabled = enabled,
                 interactionSource = interactionSource,
                 indication = null,
+                onClickLabel = "Выбрать $title",
                 onClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     onClick(centerInRoot)
@@ -2449,7 +2452,19 @@ private fun ToggleLine(
     onChecked: (Boolean) -> Unit,
     enabled: Boolean = true
 ) {
-    Row(Modifier.fillMaxWidth().padding(top = 10.dp).alpha(if (enabled) 1f else 0.42f), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+            .alpha(if (enabled) 1f else 0.42f)
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = androidx.compose.ui.semantics.Role.Switch,
+                onValueChange = onChecked
+            ),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(label, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
@@ -2459,7 +2474,7 @@ private fun ToggleLine(
         }
         Switch(
             checked = checked,
-            onCheckedChange = onChecked,
+            onCheckedChange = null,
             enabled = enabled,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = Color.White,
@@ -2849,14 +2864,13 @@ private fun makeQr(content: String): Bitmap {
     }
     val matrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, size, size, hints)
     val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-    for (x in 0 until size) {
-        for (y in 0 until size) {
-            bitmap.setPixel(
-                x,
-                y,
-                if (matrix[x, y]) android.graphics.Color.rgb(19, 44, 59) else android.graphics.Color.rgb(247, 250, 252)
-            )
+    val pixels = IntArray(size * size)
+    for (y in 0 until size) {
+        val offset = y * size
+        for (x in 0 until size) {
+            pixels[offset + x] = if (matrix[x, y]) android.graphics.Color.rgb(19, 44, 59) else android.graphics.Color.rgb(247, 250, 252)
         }
     }
+    bitmap.setPixels(pixels, 0, size, 0, 0, size, size)
     return bitmap
 }

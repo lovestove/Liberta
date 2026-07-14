@@ -1,0 +1,3 @@
+## 2024-05-18 - Jetpack Compose Switch Accessibility
+**Learning:** When using a `Switch` inside a clickable row in Jetpack Compose, the default `clickable` modifier on the row and the `onCheckedChange` on the switch cause duplicate announcements for screen readers and can lead to double-firing events.
+**Action:** Use `Modifier.toggleable(value = ..., role = Role.Switch, onValueChange = ...)` on the parent `Row` instead of `Modifier.clickable`. Set the internal `Switch` component's `onCheckedChange` to `null` to correctly merge semantics and avoid duplicate events.
