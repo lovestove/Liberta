@@ -1,0 +1,3 @@
+## 2024-05-24 - ToggleLine semantic merging for screen readers
+**Learning:** When using standard Material3 Switch components inside a custom container Row (like `ToggleLine`), the individual tap targets and semantic nodes remain separated by default. Screen readers will read the label and the switch as two distinct elements.
+**Action:** Always apply `Modifier.toggleable` with `role = Role.Switch` to the parent container, and nullify the inner Switch's `onCheckedChange` to effectively merge the semantics and increase the tap target area to the entire row. This is an essential pattern for all boolean settings in this app's design system.
