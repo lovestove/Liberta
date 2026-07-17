@@ -135,6 +135,9 @@ import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
+
 
 private const val GithubRepoUrl = "https://github.com/lovestove/Liberta"
 
@@ -2391,7 +2394,10 @@ private fun LabsSection(
                 )
             )
             .border(1.dp, Color.White.copy(alpha = 0.68f), RoundedCornerShape(18.dp))
-            .clickable { expanded = !expanded }
+            .clickable(
+                onClickLabel = if (expanded) "Свернуть" else "Открыть",
+                onClick = { expanded = !expanded }
+            )
             .padding(14.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2403,7 +2409,7 @@ private fun LabsSection(
             }
             Icon(
                 Icons.Rounded.ExpandMore,
-                contentDescription = if (expanded) "Свернуть" else "Открыть",
+                contentDescription = null,
                 tint = TextPrimary,
                 modifier = Modifier.rotate(if (expanded) 180f else 0f)
             )
@@ -2435,7 +2441,7 @@ private fun SettingLine(label: String, value: String, help: String) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(label, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             Text(value, color = TextSecondary, fontSize = 14.sp, textAlign = TextAlign.End)
-            Icon(Icons.Rounded.Info, contentDescription = help, tint = Muted, modifier = Modifier.padding(start = 8.dp).size(17.dp))
+            Icon(Icons.Rounded.Info, contentDescription = null, tint = Muted, modifier = Modifier.padding(start = 8.dp).size(17.dp))
         }
         Text(help, color = Muted, fontSize = 11.sp, lineHeight = 14.sp, modifier = Modifier.padding(top = 3.dp))
     }
@@ -2449,17 +2455,29 @@ private fun ToggleLine(
     onChecked: (Boolean) -> Unit,
     enabled: Boolean = true
 ) {
-    Row(Modifier.fillMaxWidth().padding(top = 10.dp).alpha(if (enabled) 1f else 0.42f), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+            .alpha(if (enabled) 1f else 0.42f)
+            .toggleable(
+                value = checked,
+                role = Role.Switch,
+                onValueChange = onChecked,
+                enabled = enabled
+            ),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(label, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Icon(Icons.Rounded.Info, contentDescription = help, tint = Muted, modifier = Modifier.padding(start = 6.dp).size(16.dp))
+                Icon(Icons.Rounded.Info, contentDescription = null, tint = Muted, modifier = Modifier.padding(start = 6.dp).size(16.dp))
             }
             Text(help, color = Muted, fontSize = 11.sp, lineHeight = 14.sp)
         }
         Switch(
             checked = checked,
-            onCheckedChange = onChecked,
+            onCheckedChange = null,
             enabled = enabled,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = Color.White,
