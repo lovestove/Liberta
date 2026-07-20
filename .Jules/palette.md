@@ -1,0 +1,3 @@
+## 2024-07-20 - Jetpack Compose Switch Accessibility and Touch Targets
+**Learning:** In Jetpack Compose, using an isolated `Switch` inside a purely layout-driven `Row` creates a small, hard-to-tap target that fails motor accessibility guidelines, and leaves the text label disconnected from the switch's state in screen reader announcements.
+**Action:** Always apply `Modifier.toggleable(value = ..., role = Role.Switch, onValueChange = ...)` on the parent `Row` of a `Switch`, and set the internal `Switch` component's `onCheckedChange` to `null`. This expands the touch target to the entire row and correctly merges the semantic label with the switch state for screen readers without double-firing events.
