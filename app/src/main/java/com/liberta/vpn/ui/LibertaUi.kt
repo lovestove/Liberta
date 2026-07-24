@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -2449,7 +2450,14 @@ private fun ToggleLine(
     onChecked: (Boolean) -> Unit,
     enabled: Boolean = true
 ) {
-    Row(Modifier.fillMaxWidth().padding(top = 10.dp).alpha(if (enabled) 1f else 0.42f), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().padding(top = 10.dp).alpha(if (enabled) 1f else 0.42f)
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = androidx.compose.ui.semantics.Role.Switch,
+                onValueChange = onChecked
+            ),
+        verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(label, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
@@ -2457,10 +2465,7 @@ private fun ToggleLine(
             }
             Text(help, color = Muted, fontSize = 11.sp, lineHeight = 14.sp)
         }
-        Switch(
-            checked = checked,
-            onCheckedChange = onChecked,
-            enabled = enabled,
+        Switch(checked = checked, onCheckedChange = null, enabled = enabled,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = Color.White,
                 checkedTrackColor = Emerald.copy(alpha = 0.88f),
