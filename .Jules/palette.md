@@ -1,0 +1,3 @@
+## $(date +%Y-%m-%d) - Jetpack Compose Switch Row Accessibility
+**Learning:** When building rows that contain a `Switch` in Jetpack Compose, using `Modifier.clickable` on the row or leaving both the row and switch individually interactive causes screen readers to announce them as separate elements, and can lead to double-firing events.
+**Action:** Use `Modifier.toggleable(value = ..., role = Role.Switch, onValueChange = ...)` on the parent `Row` to correctly merge semantics for screen readers, and explicitly set the internal `Switch` component's `onCheckedChange` to `null` to prevent double interactions.
