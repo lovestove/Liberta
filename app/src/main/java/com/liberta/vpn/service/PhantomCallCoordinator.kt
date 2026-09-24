@@ -1,7 +1,10 @@
 package com.liberta.vpn.service
 
+import com.liberta.vpn.data.ConnectionProfile
 import com.liberta.vpn.data.LabSettings
 import com.liberta.vpn.data.LibertaSettings
+import com.liberta.vpn.data.ServerCandidate
+import com.liberta.vpn.data.VlessParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -16,7 +19,9 @@ data class PhantomCallSession(
     val roomToken: String,
     val bridgeUrl: String,
     val mimicry: String,
-    val expiresInMinutes: Int
+    val expiresInMinutes: Int,
+    val bridgeReady: Boolean,
+    val tunnelCandidate: ServerCandidate?
 )
 
 class PhantomCallCoordinator {
@@ -39,10 +44,15 @@ class PhantomCallCoordinator {
             roomToken = room.token,
             bridgeUrl = labs.phantomBridgeUrl.trim().ifBlank { AUTO_BRIDGE_URL },
             mimicry = labs.phantomMimicryType.label,
-            expiresInMinutes = labs.phantomSessionMinutes
+            expiresInMinutes = labs.phantomSessionMinutes,
+            bridgeReady = false,
+            tunnelCandidate = null
         )
-        signalBridge("join", session, labs)
-        session
+        val bridgeResponse = signalBridge("join", session, labs)
+        session.copy(
+            bridgeReady = session.bridgeUrl != AUTO_BRIDGE_URL && bridgeResponse != null,
+            tunnelCandidate = parseBridgeCandidate(bridgeResponse)
+        )
     }
 
     suspend fun cleanup(session: PhantomCallSession?) = withContext(Dispatchers.IO) {
@@ -58,37 +68,13 @@ class PhantomCallCoordinator {
     }
 
     private fun createMeeting(labs: LabSettings): PhantomRoom {
-        if (labs.phantomBridgeUrl.isBlank()) {
-            val token = "liberta-${UUID.randomUUID()}"
-            return PhantomRoom("https://meet.jit.si/$token", token)
-        }
-        val payload = JSONObject()
-            .put("guest", true)
-            .put("client", "Liberta Android")
-            .put("mimicry", labs.phantomMimicryType.name.lowercase())
-            .put("ttl_minutes", labs.phantomSessionMinutes)
-        val response = postJson(labs.phantomTransportService.createEndpoint, payload)
-        val json = JSONObject(response)
-        val url = firstNonBlank(
-            json.optString("join_url"),
-            json.optString("joinUrl"),
-            json.optString("url"),
-            json.optString("link")
-        )
-        if (url.isBlank()) {
-            error("Phantom Call: сервис не вернул ссылку комнаты")
-        }
-        val token = firstNonBlank(
-            json.optString("token"),
-            json.optString("room_token"),
-            json.optString("id"),
-            url.substringAfterLast('/')
-        )
-        return PhantomRoom(url, token)
+        val providerSlug = labs.phantomTransportService.name.lowercase().replace('_', '-')
+        val token = "liberta-$providerSlug-${UUID.randomUUID()}"
+        return PhantomRoom("https://meet.jit.si/$token", token)
     }
 
-    private fun signalBridge(action: String, session: PhantomCallSession, labs: LabSettings) {
-        if (session.bridgeUrl == AUTO_BRIDGE_URL) return
+    private fun signalBridge(action: String, session: PhantomCallSession, labs: LabSettings): String? {
+        if (session.bridgeUrl == AUTO_BRIDGE_URL) return null
         val payload = JSONObject()
             .put("action", action)
             .put("session_id", session.id)
@@ -98,7 +84,23 @@ class PhantomCallCoordinator {
             .put("mimicry", labs.phantomMimicryType.name.lowercase())
             .put("noise", labs.phantomCamouflageNoise.name.lowercase())
             .put("expires_in_minutes", labs.phantomSessionMinutes)
-        postJson(session.bridgeUrl, payload)
+        return postJson(session.bridgeUrl, payload)
+    }
+
+    private fun parseBridgeCandidate(response: String?): ServerCandidate? {
+        if (response.isNullOrBlank()) return null
+        val json = runCatching { JSONObject(response) }.getOrNull()
+        val link = if (json != null) {
+            firstNonBlank(
+                json.optString("vless"),
+                json.optString("vless_link"),
+                json.optString("server_link"),
+                json.optString("outbound")
+            )
+        } else {
+            response
+        }
+        return VlessParser.parseLink(link, ConnectionProfile.BLACKLISTS)?.copy(name = "Phantom bridge")
     }
 
     private fun postJson(endpoint: String, payload: JSONObject): String {

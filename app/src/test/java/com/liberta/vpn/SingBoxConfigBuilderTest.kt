@@ -20,17 +20,21 @@ class SingBoxConfigBuilderTest {
         assertTrue(json.contains("\"type\": \"vless\""))
         assertTrue(json.contains("\"server\": \"vpn.example\""))
         assertTrue(json.contains("\"final\": \"proxy\""))
-        assertTrue(json.contains("\"final\": \"dns-direct\""))
-        assertTrue(json.contains("\"type\": \"https\""))
+        assertTrue(json.contains("\"auto_detect_interface\": true"))
+        assertTrue(json.contains("\"override_android_vpn\": false"))
+        assertTrue(json.contains("\"final\": \"dns-remote\""))
+        assertTrue(json.contains("\"type\": \"tcp\""))
         assertTrue(json.contains("\"tag\": \"dns-direct\""))
-        assertTrue(json.contains("\"server_name\": \"cloudflare-dns.com\""))
-        assertTrue(json.contains("\"path\": \"/dns-query\""))
-        assertTrue(json.contains("\"detour\": \"proxy\""))
+        assertFalse(json.contains("\"path\": \"/dns-query\""))
         assertTrue(json.contains("\"domain_resolver\": \"dns-direct\""))
         assertTrue(json.contains("\"connect_timeout\": \"1200ms\""))
         assertTrue(json.contains("\"domain\": [\"vpn.example\"]"))
+        assertTrue(json.contains("\"domain\": \"vpn.example\""))
         assertTrue(json.contains("\"server\": \"dns-direct\""))
-        assertTrue(json.contains("\"port\": 53, \"action\": \"hijack-dns\""))
+        assertTrue(json.contains("\"ip_cidr\": \"172.19.0.2/32\""))
+        assertTrue(json.contains("\"port\": 53"))
+        assertTrue(json.contains("\"network\": [\"tcp\", \"udp\"]"))
+        assertTrue(json.contains("\"protocol\": \"dns\""))
         assertTrue(json.contains("\"action\": \"hijack-dns\""))
         assertTrue(json.contains("\"reality\""))
     }
@@ -60,7 +64,7 @@ class SingBoxConfigBuilderTest {
     }
 
     @Test
-    fun mapsKnownCustomDnsToDoh() {
+    fun mapsKnownCustomDnsToTcp() {
         val json = SingBoxConfigBuilder().build(
             testCandidate(),
             LibertaSettings(
@@ -69,9 +73,9 @@ class SingBoxConfigBuilderTest {
             )
         )
 
-        assertTrue(json.contains("\"type\": \"https\""))
+        assertTrue(json.contains("\"type\": \"tcp\""))
         assertTrue(json.contains("\"server\": \"8.8.8.8\""))
-        assertTrue(json.contains("\"server_name\": \"dns.google\""))
+        assertFalse(json.contains("\"server_name\": \"dns.google\""))
     }
 
     @Test
@@ -83,6 +87,17 @@ class SingBoxConfigBuilderTest {
 
         assertTrue(json.contains("\"port\": [5060, 5061]"))
         assertTrue(json.contains("\"port_range\": \"10000:20000\""))
+        assertTrue(json.contains("\"outbound\": \"direct\""))
+    }
+
+    @Test
+    fun routesSelectedIpServerDirectlyToAvoidTunnelLoop() {
+        val json = SingBoxConfigBuilder().build(
+            testCandidate().copy(host = "64.188.64.19"),
+            LibertaSettings()
+        )
+
+        assertTrue(json.contains("\"ip_cidr\": \"64.188.64.19/32\""))
         assertTrue(json.contains("\"outbound\": \"direct\""))
     }
 
@@ -99,6 +114,50 @@ class SingBoxConfigBuilderTest {
 
         assertFalse(whiteJson.contains("\"domain_suffix\""))
         assertEquals(extractRouteBlock(blackJson), extractRouteBlock(whiteJson))
+    }
+
+    @Test
+    fun whitelistProfileAllowsSlowerMobileConnectHandshake() {
+        val json = SingBoxConfigBuilder().build(
+            testCandidate(ConnectionProfile.WHITELISTS),
+            LibertaSettings(profile = ConnectionProfile.WHITELISTS)
+        )
+
+        assertTrue(json.contains("\"connect_timeout\": \"3500ms\""))
+    }
+
+    @Test
+    fun polymorphicLabsNeverEmitUnsupportedTlsFields() {
+        val json = SingBoxConfigBuilder().build(
+            testCandidate(),
+            LibertaSettings(labs = LabSettings(polymorphicCore = true, dynamicPadding = true, jitterShaping = true))
+        )
+
+        assertFalse(json.contains("\"fragment\""))
+        assertFalse(json.contains("\"padding\""))
+    }
+
+    @Test
+    fun preservesTlsAlpnInsecureAndWebsocketHostHeader() {
+        val json = SingBoxConfigBuilder().build(
+            testCandidate().copy(
+                transport = "ws",
+                security = "tls",
+                publicKey = null,
+                shortId = null,
+                flow = null,
+                path = "/edge",
+                hostHeader = "cdn.example.com",
+                alpn = listOf("h2", "http/1.1"),
+                allowInsecure = true
+            ),
+            LibertaSettings()
+        )
+
+        assertTrue(json.contains("\"insecure\": true"))
+        assertTrue(json.contains("\"alpn\": [\"h2\", \"http/1.1\"]"))
+        assertTrue(json.contains("\"headers\": { \"Host\": \"cdn.example.com\" }"))
+        assertTrue(json.contains("\"path\": \"/edge\""))
     }
 
     private fun testCandidate(profile: ConnectionProfile = ConnectionProfile.BLACKLISTS): ServerCandidate =

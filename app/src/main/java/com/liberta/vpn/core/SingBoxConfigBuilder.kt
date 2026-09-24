@@ -2,6 +2,7 @@ package com.liberta.vpn.core
 
 import com.liberta.vpn.data.LibertaSettings
 import com.liberta.vpn.data.ServerCandidate
+import com.liberta.vpn.data.TlsFingerprintProfile
 
 class SingBoxConfigBuilder {
     fun build(selected: ServerCandidate, settings: LibertaSettings): String {
@@ -25,7 +26,7 @@ class SingBoxConfigBuilder {
             }
         }.joinToString(",\n")
         
-        val routeRules = buildRouteRules(settings.labs.phantomCall)
+        val routeRules = buildRouteRules(selected, settings.labs.phantomCall)
 
         return """
             {
@@ -36,7 +37,7 @@ class SingBoxConfigBuilder {
                   { "type": "tcp", "tag": "dns-direct", "server": "8.8.8.8", "server_port": 53 }
                 ],
                 $dnsRules
-                "final": "dns-direct"
+                "final": "dns-remote"
               },
               "inbounds": [
                 $inbounds
@@ -50,16 +51,20 @@ class SingBoxConfigBuilder {
                 "rules": [
                   $routeRules
                 ],
-                "auto_detect_interface": false,
+                "auto_detect_interface": true,
+                "override_android_vpn": false,
                 "final": "proxy"
               }
             }
         """.trimIndent()
     }
     
-    private fun buildRouteRules(phantomCall: Boolean): String {
+    private fun buildRouteRules(selected: ServerCandidate, phantomCall: Boolean): String {
         val rules = mutableListOf<String>()
+        selectedServerDirectRule(selected)?.let { rules.add(it) }
         rules.add("{ \"ip_cidr\": \"172.19.0.2/32\", \"port\": 53, \"action\": \"hijack-dns\" }")
+        rules.add("{ \"network\": [\"tcp\", \"udp\"], \"port\": 53, \"action\": \"hijack-dns\" }")
+        rules.add("{ \"protocol\": \"dns\", \"action\": \"hijack-dns\" }")
         
         // Исключаем SIP/RTP для звонков (Phantom Call)
         if (phantomCall) {
@@ -71,6 +76,17 @@ class SingBoxConfigBuilder {
         rules.add("{ \"ip_cidr\": [\"10.0.0.0/8\", \"172.16.0.0/12\", \"192.168.0.0/16\", \"127.0.0.0/8\", \"100.64.0.0/10\", \"169.254.0.0/16\", \"224.0.0.0/4\"], \"action\": \"route\", \"outbound\": \"direct\" }")
         
         return rules.joinToString(",\n                  ")
+    }
+
+    private fun selectedServerDirectRule(selected: ServerCandidate): String? {
+        val host = selected.host.trim()
+        if (host.isBlank()) return null
+        return if (host.isIpLiteral()) {
+            val cidr = if (host.contains(':')) "$host/128" else "$host/32"
+            "{ \"ip_cidr\": \"${escape(cidr)}\", \"action\": \"route\", \"outbound\": \"direct\" }"
+        } else {
+            "{ \"domain\": \"${escape(host)}\", \"action\": \"route\", \"outbound\": \"direct\" }"
+        }
     }
 
     private fun tunInbound(mtu: Int, ipv6Enabled: Boolean): String {
@@ -93,6 +109,11 @@ class SingBoxConfigBuilder {
     }
 
     private fun vlessOutbound(server: ServerCandidate, settings: LibertaSettings): String {
+        val connectTimeout = if (settings.profile == com.liberta.vpn.data.ConnectionProfile.WHITELISTS) {
+            "3500ms"
+        } else {
+            "1200ms"
+        }
         val parts = mutableListOf(
             "\"type\": \"vless\"",
             "\"tag\": \"proxy\"",
@@ -101,7 +122,7 @@ class SingBoxConfigBuilder {
             "\"uuid\": \"${escape(server.uuid)}\"",
             "\"packet_encoding\": \"xudp\"",
             "\"domain_resolver\": \"dns-direct\"",
-            "\"connect_timeout\": \"1200ms\""
+            "\"connect_timeout\": \"$connectTimeout\""
         )
         server.flow?.takeIf { it.isNotBlank() }?.let { parts += "\"flow\": \"${escape(it)}\"" }
         if (server.security.equals("tls", true) || server.security.equals("reality", true)) {
@@ -112,39 +133,55 @@ class SingBoxConfigBuilder {
     }
 
     private fun tlsBlock(server: ServerCandidate, settings: LibertaSettings): String {
+        val fingerprint = server.fingerprint?.takeIf { it.isNotBlank() }
+            ?: settings.labs.tlsFingerprintProfile.toSingBoxFingerprint()
         val fields = mutableListOf(
             "\"enabled\": true",
             "\"server_name\": \"${escape(server.sni ?: server.host)}\"",
-            "\"utls\": { \"enabled\": true, \"fingerprint\": \"${escape(server.fingerprint ?: "chrome")}\" }"
+            "\"utls\": { \"enabled\": true, \"fingerprint\": \"${escape(fingerprint)}\" }"
         )
         if (server.security.equals("reality", true)) {
             fields += "\"reality\": { \"enabled\": true, \"public_key\": \"${escape(server.publicKey.orEmpty())}\", \"short_id\": \"${escape(server.shortId.orEmpty())}\" }"
         }
-        if (settings.labs.polymorphicCore) {
-            fields += "\"fragment\": { \"enabled\": true, \"packets\": \"1-3\", \"length\": \"5-10\", \"interval\": \"1-5\" }"
+        if (server.allowInsecure && !server.security.equals("reality", true)) {
+            fields += "\"insecure\": true"
+        }
+        if (server.alpn.isNotEmpty()) {
+            fields += "\"alpn\": [${server.alpn.joinToString(", ") { "\"${escape(it)}\"" }}]"
         }
         return "{ ${fields.joinToString(", ")} }"
     }
 
     private fun transportBlock(server: ServerCandidate): String? =
         when (server.transport.lowercase()) {
-            "ws" -> "{ \"type\": \"ws\", \"path\": \"${escape(server.path ?: "/")}\" }"
+            "ws" -> wsTransportBlock(server)
             "grpc" -> "{ \"type\": \"grpc\", \"service_name\": \"${escape(server.serviceName ?: server.path ?: "")}\" }"
             "xhttp" -> "{ \"type\": \"xhttp\", \"path\": \"${escape(server.path ?: "/")}\" }"
             "tcp", "raw" -> null
             else -> null
         }
 
+    private fun wsTransportBlock(server: ServerCandidate): String {
+        val parts = mutableListOf(
+            "\"type\": \"ws\"",
+            "\"path\": \"${escape(server.path ?: "/")}\""
+        )
+        server.hostHeader?.takeIf { it.isNotBlank() }?.let { host ->
+            parts += "\"headers\": { \"Host\": \"${escape(host)}\" }"
+        }
+        return "{ ${parts.joinToString(", ")} }"
+    }
+
     private fun effectiveDnsServer(settings: LibertaSettings): DnsEndpoint =
         when (settings.dnsProvider) {
-            com.liberta.vpn.data.DnsProvider.CLOUDFLARE -> DnsEndpoint.doh("1.1.1.1", "cloudflare-dns.com")
-            com.liberta.vpn.data.DnsProvider.GOOGLE -> DnsEndpoint.doh("8.8.8.8", "dns.google")
-            com.liberta.vpn.data.DnsProvider.ADGUARD -> DnsEndpoint.doh("94.140.14.14", "dns.adguard-dns.com")
+            com.liberta.vpn.data.DnsProvider.CLOUDFLARE -> DnsEndpoint.tcp("1.1.1.1")
+            com.liberta.vpn.data.DnsProvider.GOOGLE -> DnsEndpoint.tcp("8.8.8.8")
+            com.liberta.vpn.data.DnsProvider.ADGUARD -> DnsEndpoint.tcp("94.140.14.14")
             com.liberta.vpn.data.DnsProvider.CUSTOM -> {
                 val custom = settings.customDns.trim()
                 DnsEndpoint.forAddress(custom.takeIf { it.isNotBlank() } ?: "1.1.1.1")
             }
-            else -> DnsEndpoint.doh("1.1.1.1", "cloudflare-dns.com")
+            else -> DnsEndpoint.tcp("1.1.1.1")
         }
 
     private fun effectiveMtu(settings: LibertaSettings): Int =
@@ -191,16 +228,17 @@ class SingBoxConfigBuilder {
             fun doh(server: String, host: String): DnsEndpoint = DnsEndpoint(server, host)
             fun tcp(server: String): DnsEndpoint = DnsEndpoint(server)
 
-            fun forAddress(server: String): DnsEndpoint =
-                when (server) {
-                    "1.1.1.1", "1.0.0.1" -> doh(server, "cloudflare-dns.com")
-                    "8.8.8.8", "8.8.4.4" -> doh(server, "dns.google")
-                    "94.140.14.14", "94.140.15.15" -> doh(server, "dns.adguard-dns.com")
-                    else -> tcp(server)
-                }
+            fun forAddress(server: String): DnsEndpoint = tcp(server)
         }
     }
 }
 
 private fun String.isIpLiteral(): Boolean =
     all { it.isDigit() || it == '.' } || contains(':')
+
+private fun TlsFingerprintProfile.toSingBoxFingerprint(): String =
+    when (this) {
+        TlsFingerprintProfile.CHROME_WINDOWS -> "chrome"
+        TlsFingerprintProfile.SAFARI_IOS -> "safari"
+        TlsFingerprintProfile.FIREFOX_LINUX -> "firefox"
+    }

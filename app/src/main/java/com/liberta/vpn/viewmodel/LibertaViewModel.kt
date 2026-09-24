@@ -20,7 +20,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlin.math.max
 
 class LibertaViewModel(application: Application) : AndroidViewModel(application) {
     private val container = (application as LibertaApplication).container
@@ -81,11 +80,12 @@ class LibertaViewModel(application: Application) : AndroidViewModel(application)
                 }
                 val total = snapshots.sumOf { it.candidates.size }
                 val lastUpdated = snapshots.maxOfOrNull { it.lastUpdatedEpochMs } ?: 0L
+                container.serverMaintenanceCoordinator.refreshSoon("launch_cache_check")
                 LibertaRuntime.update(
                     ConnectionPhase.DISCONNECTED,
                     connectionMethod = activeMethod,
                     profile = activeProfile,
-                    message = if (total > 0) "Кеш готов: $total серверов" else "Готов к подключению",
+                    message = if (total > 0) "Кеш готов: $total серверов; проверка идет в фоне" else "Готов к подключению",
                     lastUpdatedEpochMs = lastUpdated.takeIf { it > 0L }
                 )
                 return@launch
@@ -97,25 +97,17 @@ class LibertaViewModel(application: Application) : AndroidViewModel(application)
                 message = "Обновляю все подписки"
             )
             runCatching {
-                val intervalMs = settings.value.autoRefreshIntervalMinutes.coerceIn(5, 10_080) * 60L * 1_000L
-                val now = System.currentTimeMillis()
-                var total = 0
-                var lastUpdated = 0L
-                ConnectionProfile.entries.forEach { profile ->
-                    val cached = container.subscriptionRepository.cached(profile)
-                    val stale = cached == null || now - cached.lastUpdatedEpochMs >= intervalMs
-                    val snapshot = container.subscriptionRepository.load(profile, forceRefresh || stale)
-                    total += snapshot.candidates.size
-                    lastUpdated = max(lastUpdated, snapshot.lastUpdatedEpochMs)
-                }
-                total to lastUpdated
-            }.onSuccess { (total, lastUpdated) ->
+                container.serverMaintenanceCoordinator.refreshAndValidate(
+                    forceRefresh = true,
+                    reason = "manual"
+                )
+            }.onSuccess { result ->
                 LibertaRuntime.update(
                     ConnectionPhase.DISCONNECTED,
                     connectionMethod = activeMethod,
                     profile = activeProfile,
-                    message = "Обновлено: $total серверов",
-                    lastUpdatedEpochMs = lastUpdated.takeIf { it > 0L }
+                    message = "Обновлено: ${result.totalCandidates} серверов, проверено ${result.validatedServers}",
+                    lastUpdatedEpochMs = result.lastUpdatedEpochMs.takeIf { it > 0L }
                 )
             }.onFailure { error ->
                 LibertaRuntime.update(

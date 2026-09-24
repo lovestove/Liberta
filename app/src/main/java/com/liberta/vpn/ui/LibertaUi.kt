@@ -139,24 +139,24 @@ import kotlin.math.sin
 
 private const val GithubRepoUrl = "https://github.com/lovestove/Liberta"
 
-private val Ink = Color(0xFFF7FAFC)
-private val Deep = Color(0xFFE7EEF4)
-private val Graphite = Color(0xFF203545)
-private val Glass = Color(0xB8FFFFFF)
-private val GlassSoft = Color(0x8EFFFFFF)
-private val Line = Color(0x99FFFFFF)
-private val Gold = Color(0xFFDDB85B)
-private val Pearl = Color(0xFFF5FAFC)
-private val TextPrimary = Color(0xFF132C3B)
-private val TextSecondary = Color(0xFF587080)
-private val Muted = Color(0xFF8195A2)
-private val Emerald = Color(0xFF5FE2B3)
-private val Azure = Color(0xFF77B8FF)
-private val Amber = Color(0xFFE8B452)
-private val Rose = Color(0xFFD96C79)
-private val DiffractionA = Color(0x66A5D9FF)
-private val DiffractionB = Color(0x55F4C87D)
-private val DiffractionC = Color(0x55A7F2CF)
+private val Ink = Color(0xFFF4F8EF)
+private val Deep = Color(0xFFE4ECD8)
+private val Graphite = Color(0xFF183628)
+private val Glass = Color(0xCCEAF3E2)
+private val GlassSoft = Color(0x99F7FBF1)
+private val Line = Color(0x99DDEAD2)
+private val Gold = Color(0xFFD7B857)
+private val Pearl = Color(0xFFF9FBF3)
+private val TextPrimary = Color(0xFF173526)
+private val TextSecondary = Color(0xFF55715E)
+private val Muted = Color(0xFF7F947F)
+private val Emerald = Color(0xFF2FA866)
+private val Azure = Color(0xFF5E9E65)
+private val Amber = Color(0xFFD2A84A)
+private val Rose = Color(0xFFB5655C)
+private val DiffractionA = Color(0x665E9E65)
+private val DiffractionB = Color(0x55D7B857)
+private val DiffractionC = Color(0x5537B77A)
 
 @Composable
 private fun rememberDeviceParallax(): Offset {
@@ -426,7 +426,8 @@ fun LibertaApp(
                         },
                         onSettingsChange = onSettingsChange,
                         onLabsChange = onLabsChange,
-                        onRecover = onRecover
+                        onRecover = onRecover,
+                        onRefresh = onRefresh
                     )
                 } else {
                     SettingsScreen(
@@ -469,7 +470,8 @@ private fun HomeScreen(
     onConnectionModePower: (ConnectionMethod, Offset) -> Unit,
     onSettingsChange: ((LibertaSettings) -> LibertaSettings) -> Unit,
     onLabsChange: ((LabSettings) -> LabSettings) -> Unit,
-    onRecover: () -> Unit
+    onRecover: () -> Unit,
+    onRefresh: () -> Unit
 ) {
     BoxWithConstraints(
         Modifier
@@ -505,16 +507,15 @@ private fun HomeScreen(
         )
 
         if (status.phase == ConnectionPhase.ERROR) {
-            LensActionButton(
-                onClick = onRecover,
+            SmartRecoveryPanel(
+                onRefresh = onRefresh,
+                onRecover = onRecover,
+                onPhantom = { onConnectionModePower(ConnectionMethod.PHANTOM_CALL, Offset.Zero) },
+                onMesh = { onConnectionModePower(ConnectionMethod.MESH_ACCESS, Offset.Zero) },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = lensTop + if (compact) 252.dp else 295.dp)
-                    .height(48.dp)
-                    .width(172.dp)
-            ) {
-                Text("Восстановить", color = TextPrimary, fontWeight = FontWeight.SemiBold)
-            }
+                    .padding(top = lensTop + if (compact) 240.dp else 282.dp)
+            )
         }
 
         FloatingControlDock(
@@ -643,16 +644,14 @@ private fun PowerLens(status: VpnStatus, modifier: Modifier, onPower: (Offset) -
             val active = status.isConnected || status.isBusy
             val accent = status.accent()
             val turbulence = status.networkTurbulence()
-            val flowSpeed = status.networkFlowSpeed()
 
             drawPowerBloom(center, radius, status.trafficPulse, accent, active)
-            with(DiffractionLensShader) {
-                drawDistortionField(center, radius * 1.13f, flow * 6.28f, active, status.trafficPulse)
-                drawLens(center, radius, flow * 6.28f, active, status.trafficPulse)
+            with(BioticFluxShader) {
+                drawMycelium(center, radius * 0.96f, flow * 6.28f, active, status.trafficPulse)
+                drawNucleus(center, radius, breathe * 6.28f, active, status.trafficPulse)
             }
-            drawInternalFluidDynamics(center, radius, flow, active, status.trafficPulse, turbulence, accent)
-            drawRefractionCaustics(center, radius, flow, active, status.trafficPulse, turbulence, flowSpeed)
-            drawLensFieldArcs(center, radius, flow, active, status.trafficPulse, turbulence, accent)
+            drawInternalFluidDynamics(center, radius, breathe, active, status.trafficPulse, turbulence, accent)
+            drawBioticVeins(center, radius, breathe, active, status.trafficPulse, turbulence, accent)
             drawCircle(
                 color = Color.White.copy(alpha = 0.56f),
                 radius = radius * 1.005f,
@@ -660,16 +659,54 @@ private fun PowerLens(status: VpnStatus, modifier: Modifier, onPower: (Offset) -
                 style = Stroke(width = 1.4.dp.toPx())
             )
             drawCircle(
-                color = Gold.copy(alpha = 0.34f + status.trafficPulse * 0.20f),
+                color = Emerald.copy(alpha = 0.30f + status.trafficPulse * 0.18f),
                 radius = radius * (0.94f + breathe * 0.04f),
                 center = center,
                 style = Stroke(width = (1.4.dp + 2.dp * status.trafficPulse).toPx(), cap = StrokeCap.Round)
             )
-            drawDiffractionRim(center, radius, flow, active, status.trafficPulse, accent)
-            with(DiffractionLensShader) {
-                drawPowerGlyph(center, radius * 0.27f, flow * 6.28f, active, status.trafficPulse)
+            with(BioticFluxShader) {
+                drawBioGlyph(center, radius * 0.27f, breathe * 6.28f, active, status.trafficPulse)
             }
         }
+    }
+}
+
+@Composable
+private fun SmartRecoveryPanel(
+    onRefresh: () -> Unit,
+    onRecover: () -> Unit,
+    onPhantom: () -> Unit,
+    onMesh: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    GlassPanel(modifier.fillMaxWidth(0.92f)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "План восстановления",
+                color = TextPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                RecoveryChip("Обновить", onRefresh, Modifier.weight(1f))
+                RecoveryChip("Повторить", onRecover, Modifier.weight(1f))
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                RecoveryChip("Звонок", onPhantom, Modifier.weight(1f))
+                RecoveryChip("Меш", onMesh, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecoveryChip(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    LensActionButton(
+        onClick = onClick,
+        modifier = modifier.height(40.dp),
+        selected = false
+    ) {
+        Text(text, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -752,6 +789,55 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawInternalFluidDy
             style = Stroke(width = (0.6f + turbulence).dp.toPx())
         )
     }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBioticVeins(
+    center: Offset,
+    radius: Float,
+    phase: Float,
+    active: Boolean,
+    traffic: Float,
+    turbulence: Float,
+    accent: Color
+) {
+    val alpha = (if (active) 0.24f else 0.12f) + traffic * 0.15f
+    val sway = sin(phase * 6.28f) * radius * (0.018f + turbulence * 0.012f)
+    repeat(7) { index ->
+        val lane = index - 3
+        val start = Offset(center.x, center.y + radius * 0.40f)
+        val mid = Offset(
+            center.x + lane * radius * 0.13f + sway * (lane / 3f),
+            center.y + radius * (0.06f - index * 0.012f)
+        )
+        val end = Offset(
+            center.x + lane * radius * 0.20f,
+            center.y - radius * (0.42f - kotlin.math.abs(lane) * 0.035f)
+        )
+        val path = Path().apply {
+            moveTo(start.x, start.y)
+            quadraticTo(mid.x, mid.y, end.x, end.y)
+        }
+        drawPath(
+            path = path,
+            color = listOf(Emerald, Azure, Gold, accent)[index % 4].copy(alpha = alpha * (1f - kotlin.math.abs(lane) * 0.11f)),
+            style = Stroke(width = (0.75f + traffic * 1.05f).dp.toPx(), cap = StrokeCap.Round)
+        )
+        drawCircle(
+            color = Color.White.copy(alpha = alpha * 0.70f),
+            radius = (1.0f + traffic * 1.8f).dp.toPx(),
+            center = end
+        )
+    }
+    val heartAlpha = (0.10f + traffic * 0.16f + if (active) 0.08f else 0f).coerceIn(0f, 0.42f)
+    drawCircle(
+        brush = Brush.radialGradient(
+            listOf(accent.copy(alpha = heartAlpha), Emerald.copy(alpha = heartAlpha * 0.40f), Color.Transparent),
+            center = center,
+            radius = radius * 0.46f
+        ),
+        radius = radius * 0.46f,
+        center = center
+    )
 }
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawRefractionCaustics(
@@ -1654,22 +1740,22 @@ private enum class ConnectionMode(
     BLACKLISTS(
         "Черные списки",
         ConnectionMethod.BLACKLISTS,
-        "Первый независимый источник VLESS/Reality серверов для обхода блокировок."
+        "Основной режим. Быстро выбирает рабочий сервер из черной подписки и проверяет передачу данных."
     ),
     WHITELISTS(
         "Белые списки",
         ConnectionMethod.WHITELISTS,
-        "Второй независимый источник VLESS/Reality серверов для мира навязанных белых списков."
+        "Запасной список серверов для мобильной сети и ситуаций, когда обычная подписка плохо проходит."
     ),
     PHANTOM_CALL(
         "Мимикрия под звонки",
         ConnectionMethod.PHANTOM_CALL,
-        "Запускает VPN и автоматически создает бесплатную комнату звонка. Ничего вручную настраивать не нужно."
+        "Сначала подключает звонок. VPN-трафик идет через звонок только при настроенном bridge."
     ),
     MESH(
         "Меш-сеть",
         ConnectionMethod.MESH_ACCESS,
-        "Подключает вас к mesh-доступу, чтобы пользоваться интернетом через доступные узлы. Это не включает помощь другим."
+        "Последний резерв: пробует доступ через узлы сообщества, если серверы и звонок не помогли."
     )
 }
 
@@ -1749,7 +1835,7 @@ private fun SettingsScreen(
         item {
             SettingsPanel("Фундамент сети") {
                 ToggleLine("Автозапуск", "Запускает Liberta вместе с системой Android.", settings.autoStart, onAutoStartChange)
-                ToggleLine("Kill Switch", "Блокирует трафик при внезапном разрыве туннеля.", settings.killSwitch, onChecked = { checked ->
+                ToggleLine("Kill Switch", "Ужесточает маршруты; полный блок требует Always-on VPN в Android.", settings.killSwitch, onChecked = { checked ->
                     onSettingsChange { it.copy(killSwitch = checked) }
                 })
                 ToggleLine("IPv6 внутри туннеля", "Включает IPv6-маршрут; выключение снижает риск утечек.", settings.ipv6Enabled, onChecked = { checked ->
@@ -1772,7 +1858,7 @@ private fun SettingsScreen(
                     OutlinedTextField(
                         value = settings.customDns,
                         onValueChange = { value -> onSettingsChange { it.copy(customDns = value) } },
-                        label = { Text("DoH/DoT или IP DNS") },
+                        label = { Text("IP DNS через TCP") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
                     )
@@ -1810,7 +1896,7 @@ private fun SettingsScreen(
             LabsPanel("Лаборатория Liberta") {
                 LabsSection(
                     title = "Мимикрия под звонки",
-                    description = "Автоматически создает комнату звонка и включает бесплатный auto-bridge без ручной ссылки.",
+                    description = "Резервный режим для случаев, когда обычные VPN-серверы не проходят. Сначала создается звонок, а VPN-трафик должен идти через совместимый bridge звонка.",
                     enabled = settings.labs.phantomCall,
                     onMasterChange = { checked -> onLabsChange { it.copy(phantomCall = checked) } }
                 ) { available ->
@@ -1822,11 +1908,14 @@ private fun SettingsScreen(
                     }, enabled = available)
                     ToggleLine("Автогенерация комнат", "Создает новую встречу для каждой VPN-сессии.", settings.labs.phantomAutoGenerateRooms, { checked ->
                         onLabsChange { it.copy(phantomAutoGenerateRooms = checked) }
-                    }, enabled = available)
+                    }, enabled = available, showHelpText = false)
                     if (!settings.labs.phantomAutoGenerateRooms) {
                         LabsTextField("Своя ссылка комнаты", settings.labs.phantomCustomRoomUrl, available) { value ->
                             onLabsChange { it.copy(phantomCustomRoomUrl = value) }
                         }
+                    }
+                    LabsTextField("Bridge URL звонка", settings.labs.phantomBridgeUrl, available) { value ->
+                        onLabsChange { it.copy(phantomBridgeUrl = value) }
                     }
                     EnumPills(PhantomNoiseProfile.entries, settings.labs.phantomCamouflageNoise, { it.label }, { value ->
                         onLabsChange { it.copy(phantomCamouflageNoise = value) }
@@ -1837,21 +1926,22 @@ private fun SettingsScreen(
                         value = "${settings.labs.phantomSessionMinutes} мин",
                         enabled = available,
                         onMinus = { onLabsChange { it.copy(phantomSessionMinutes = it.phantomSessionMinutes - 5) } },
-                        onPlus = { onLabsChange { it.copy(phantomSessionMinutes = it.phantomSessionMinutes + 5) } }
+                        onPlus = { onLabsChange { it.copy(phantomSessionMinutes = it.phantomSessionMinutes + 5) } },
+                        showSubtitle = false
                     )
                 }
 
                 LabsSection(
-                    title = "Нейро-стеганография",
-                    description = "Резервное получение конфигов из скрытых данных в изображениях соцсетей.",
+                    title = "Картинки с серверами",
+                    description = "Резервное обновление: GitHub упаковывает подписки в зашифрованные картинки. Позже их можно будет получать из VK, пока они сохраняются как артефакт сборки.",
                     enabled = settings.labs.socialSteganography,
                     onMasterChange = { checked -> onLabsChange { it.copy(socialSteganography = checked) } }
                 ) { available ->
-                    ToggleLine("Telegram-каналы", "Мониторинг последних публикаций.", settings.labs.stegoTelegram, { checked -> onLabsChange { it.copy(stegoTelegram = checked) } }, available)
-                    ToggleLine("Reddit", "Поиск скрытых ключей в публичных постах.", settings.labs.stegoReddit, { checked -> onLabsChange { it.copy(stegoReddit = checked) } }, available)
-                    ToggleLine("Twitter", "Резервный источник для коротких обновлений.", settings.labs.stegoTwitter, { checked -> onLabsChange { it.copy(stegoTwitter = checked) } }, available)
-                    ToggleLine("Фото-хостинги", "Сканирование локальных зеркал изображений.", settings.labs.stegoPhotoHosts, { checked -> onLabsChange { it.copy(stegoPhotoHosts = checked) } }, available)
-                    StepLine("Глубина сканирования", "Количество последних постов.", settings.labs.stegoScanDepth.toString(), available, { onLabsChange { it.copy(stegoScanDepth = it.stegoScanDepth - 5) } }, { onLabsChange { it.copy(stegoScanDepth = it.stegoScanDepth + 5) } })
+                    ToggleLine("VK-канал", "Получать картинки с серверами из VK, когда будет подключен токен.", settings.labs.stegoTelegram, { checked -> onLabsChange { it.copy(stegoTelegram = checked) } }, available, showHelpText = false)
+                    ToggleLine("GitHub-артефакт", "Скачивать свежую картинку из GitHub Actions.", settings.labs.stegoReddit, { checked -> onLabsChange { it.copy(stegoReddit = checked) } }, available, showHelpText = false)
+                    ToggleLine("Резервная ссылка", "Оставить запасной источник на случай блокировки.", settings.labs.stegoTwitter, { checked -> onLabsChange { it.copy(stegoTwitter = checked) } }, available, showHelpText = false)
+                    ToggleLine("Локальные картинки", "Проверять уже скачанные изображения на телефоне.", settings.labs.stegoPhotoHosts, { checked -> onLabsChange { it.copy(stegoPhotoHosts = checked) } }, available, showHelpText = false)
+                    StepLine("Глубина проверки", "Сколько последних картинок смотреть.", settings.labs.stegoScanDepth.toString(), available, { onLabsChange { it.copy(stegoScanDepth = it.stegoScanDepth - 5) } }, { onLabsChange { it.copy(stegoScanDepth = it.stegoScanDepth + 5) } }, showSubtitle = false)
                     LensActionButton(
                         onClick = {},
                         enabled = available,
@@ -1872,39 +1962,39 @@ private fun SettingsScreen(
 
                 LabsSection(
                     title = "Полиморфное ядро",
-                    description = "Меняет отпечатки TLS и форму пакетов там, где это поддерживает текущий sing-box профиль.",
+                    description = "Слегка меняет сетевой отпечаток подключения, чтобы оно меньше походило на шаблонный VPN.",
                     enabled = settings.labs.polymorphicCore,
                     onMasterChange = { checked -> onLabsChange { it.copy(polymorphicCore = checked) } }
                 ) { available ->
-                    StepLine("Уровень мутации", "0 - стандарт, 3 - максимум.", settings.labs.mutationLevel.toString(), available, { onLabsChange { it.copy(mutationLevel = it.mutationLevel - 1) } }, { onLabsChange { it.copy(mutationLevel = it.mutationLevel + 1) } })
+                    StepLine("Уровень мутации", "0 - стандарт, 3 - максимум.", settings.labs.mutationLevel.toString(), available, { onLabsChange { it.copy(mutationLevel = it.mutationLevel - 1) } }, { onLabsChange { it.copy(mutationLevel = it.mutationLevel + 1) } }, showSubtitle = false)
                     EnumPills(TlsFingerprintProfile.entries, settings.labs.tlsFingerprintProfile, { it.label }, { value -> onLabsChange { it.copy(tlsFingerprintProfile = value) } }, available)
-                    ToggleLine("Динамический padding", "Скрывает характерные размеры VPN-пакетов.", settings.labs.dynamicPadding, { checked -> onLabsChange { it.copy(dynamicPadding = checked) } }, available)
-                    ToggleLine("Формирование джиттера", "Рандомизирует задержки между пакетами.", settings.labs.jitterShaping, { checked -> onLabsChange { it.copy(jitterShaping = checked) } }, available)
+                    ToggleLine("Динамический padding", "Скрывает характерные размеры VPN-пакетов.", settings.labs.dynamicPadding, { checked -> onLabsChange { it.copy(dynamicPadding = checked) } }, available, showHelpText = false)
+                    ToggleLine("Мягкий джиттер", "Слегка меняет задержки между пакетами.", settings.labs.jitterShaping, { checked -> onLabsChange { it.copy(jitterShaping = checked) } }, available, showHelpText = false)
                 }
 
                 LabsSection(
                     title = "Суверенная меш-сеть",
-                    description = "Режим подключения через доступные узлы сообщества и ретрансляции зашифрованного трафика.",
+                    description = "Последний резерв: пробовать доступ через узлы сообщества, если обычные серверы и звонки не помогают.",
                     enabled = settings.labs.sovereignRelay,
                     onMasterChange = { checked -> onLabsChange { it.copy(sovereignRelay = checked) } }
                 ) { available ->
                     EnumPills(RelayRole.entries, settings.labs.relayRole, { it.label }, { value -> onLabsChange { it.copy(relayRole = value) } }, available)
-                    ToggleLine("Только на зарядке", "Отключает relay при питании от батареи.", settings.labs.relayOnlyCharging, { checked -> onLabsChange { it.copy(relayOnlyCharging = checked) } }, available)
-                    ToggleLine("Только Wi-Fi", "Не тратит мобильный трафик на mesh.", settings.labs.relayWifiOnly, { checked -> onLabsChange { it.copy(relayWifiOnly = checked) } }, available)
-                    StepLine("Порог отключения", "Минимальный заряд батареи.", "${settings.labs.relayStopBelowPercent}%", available, { onLabsChange { it.copy(relayStopBelowPercent = it.relayStopBelowPercent - 5) } }, { onLabsChange { it.copy(relayStopBelowPercent = it.relayStopBelowPercent + 5) } })
-                    StepLine("Лимит помощи", "Месячный лимит ретрансляции.", "${settings.labs.relayBandwidthGb} ГБ", available, { onLabsChange { it.copy(relayBandwidthGb = it.relayBandwidthGb - 1) } }, { onLabsChange { it.copy(relayBandwidthGb = it.relayBandwidthGb + 1) } })
+                    ToggleLine("Только на зарядке", "Отключает relay при питании от батареи.", settings.labs.relayOnlyCharging, { checked -> onLabsChange { it.copy(relayOnlyCharging = checked) } }, available, showHelpText = false)
+                    ToggleLine("Только Wi-Fi", "Не тратит мобильный трафик на mesh.", settings.labs.relayWifiOnly, { checked -> onLabsChange { it.copy(relayWifiOnly = checked) } }, available, showHelpText = false)
+                    StepLine("Порог отключения", "Минимальный заряд батареи.", "${settings.labs.relayStopBelowPercent}%", available, { onLabsChange { it.copy(relayStopBelowPercent = it.relayStopBelowPercent - 5) } }, { onLabsChange { it.copy(relayStopBelowPercent = it.relayStopBelowPercent + 5) } }, showSubtitle = false)
+                    StepLine("Лимит помощи", "Месячный лимит ретрансляции.", "${settings.labs.relayBandwidthGb} ГБ", available, { onLabsChange { it.copy(relayBandwidthGb = it.relayBandwidthGb - 1) } }, { onLabsChange { it.copy(relayBandwidthGb = it.relayBandwidthGb + 1) } }, showSubtitle = false)
                 }
 
                 LabsSection(
-                    title = "Стелс-джиттер и гомеостаз",
-                    description = "Адаптирует активность обфускации, дыхание интерфейса и тихий аудио-гул под качество сети.",
+                    title = "Живая экономия",
+                    description = "Автоматически снижает нагрузку, если экран выключен, телефон нагрелся или сеть ведет себя нестабильно.",
                     enabled = settings.labs.homeostasis,
                     onMasterChange = { checked -> onLabsChange { it.copy(homeostasis = checked) } }
                 ) { available ->
-                    SettingLine("Аудио-ландшафт", "Низкий гул зависит от ping и нагрузки", "Активен только при гомеостазе.")
-                    ToggleLine("Адаптивная частота", "Снижает активность при выключенном экране.", settings.labs.adaptiveFrequency, { checked -> onLabsChange { it.copy(adaptiveFrequency = checked) } }, available)
-                    ToggleLine("Умное переподключение", "Использует экспоненциальную задержку переподключений.", settings.labs.smartReconnect, { checked -> onLabsChange { it.copy(smartReconnect = checked) } }, available)
-                    ToggleLine("Термозащита", "Переходит на легкие алгоритмы при перегреве.", settings.labs.thermalGuard, { checked -> onLabsChange { it.copy(thermalGuard = checked) } }, available)
+                    SettingLine("Тихая обратная связь", "Зависит от сети", "Активна только при живой экономии.", showHelpText = false)
+                    ToggleLine("Адаптивная частота", "Снижает активность при выключенном экране.", settings.labs.adaptiveFrequency, { checked -> onLabsChange { it.copy(adaptiveFrequency = checked) } }, available, showHelpText = false)
+                    ToggleLine("Умное переподключение", "Не дергает сеть слишком часто после ошибок.", settings.labs.smartReconnect, { checked -> onLabsChange { it.copy(smartReconnect = checked) } }, available, showHelpText = false)
+                    ToggleLine("Термозащита", "Упрощает эффекты и проверки при перегреве.", settings.labs.thermalGuard, { checked -> onLabsChange { it.copy(thermalGuard = checked) } }, available, showHelpText = false)
                 }
             }
         }
@@ -2372,6 +2462,7 @@ private fun LabsSection(
     content: @Composable ColumnScope.(Boolean) -> Unit
 ) {
     var expanded by rememberSaveable(title) { mutableStateOf(false) }
+    var showInfo by rememberSaveable(title + "_info") { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -2387,21 +2478,38 @@ private fun LabsSection(
                 )
             )
             .border(1.dp, Color.White.copy(alpha = 0.68f), RoundedCornerShape(18.dp))
-            .clickable { expanded = !expanded }
             .padding(14.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            LensIconButton(onClick = { expanded = !expanded }, selected = enabled) {
-                Icon(Icons.Rounded.Info, contentDescription = "Что делает $title", tint = if (enabled) Azure else TextSecondary, modifier = Modifier.size(20.dp))
+            LensIconButton(onClick = { showInfo = !showInfo }, selected = showInfo || enabled) {
+                Icon(Icons.Rounded.Info, contentDescription = "Что делает $title", tint = if (enabled) Emerald else TextSecondary, modifier = Modifier.size(20.dp))
             }
-            Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp)
+                    .clickable { expanded = !expanded }
+            ) {
                 Text(title, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             }
             Icon(
                 Icons.Rounded.ExpandMore,
                 contentDescription = if (expanded) "Свернуть" else "Открыть",
                 tint = TextPrimary,
-                modifier = Modifier.rotate(if (expanded) 180f else 0f)
+                modifier = Modifier
+                    .rotate(if (expanded) 180f else 0f)
+                    .clickable { expanded = !expanded }
+            )
+        }
+        AnimatedVisibility(showInfo) {
+            Text(
+                description,
+                color = TextSecondary,
+                fontSize = 12.sp,
+                lineHeight = 15.sp,
+                modifier = Modifier
+                    .padding(top = 10.dp)
+                    .fillMaxWidth()
             )
         }
         AnimatedVisibility(expanded) {
@@ -2410,8 +2518,13 @@ private fun LabsSection(
                     .padding(top = 12.dp)
                     .clickable(enabled = false) {}
             ) {
-                Text(description, color = TextSecondary, fontSize = 12.sp, lineHeight = 15.sp)
-                ToggleLine("Включить функцию", "Активирует функцию и разблокирует параметры.", enabled, onMasterChange)
+                ToggleLine(
+                    "Включить функцию",
+                    "Можно включить или выключить весь режим одним переключателем.",
+                    enabled,
+                    onMasterChange,
+                    showHelpText = false
+                )
                 Column(Modifier.alpha(if (enabled) 1f else 0.40f)) {
                     content(enabled)
                 }
@@ -2426,14 +2539,16 @@ private fun SectionTitle(text: String) {
 }
 
 @Composable
-private fun SettingLine(label: String, value: String, help: String) {
+private fun SettingLine(label: String, value: String, help: String, showHelpText: Boolean = true) {
     Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(label, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             Text(value, color = TextSecondary, fontSize = 14.sp, textAlign = TextAlign.End)
             Icon(Icons.Rounded.Info, contentDescription = help, tint = Muted, modifier = Modifier.padding(start = 8.dp).size(17.dp))
         }
-        Text(help, color = Muted, fontSize = 11.sp, lineHeight = 14.sp, modifier = Modifier.padding(top = 3.dp))
+        if (showHelpText) {
+            Text(help, color = Muted, fontSize = 11.sp, lineHeight = 14.sp, modifier = Modifier.padding(top = 3.dp))
+        }
     }
 }
 
@@ -2443,7 +2558,8 @@ private fun ToggleLine(
     help: String,
     checked: Boolean,
     onChecked: (Boolean) -> Unit,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    showHelpText: Boolean = true
 ) {
     Row(Modifier.fillMaxWidth().padding(top = 10.dp).alpha(if (enabled) 1f else 0.42f), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
@@ -2451,7 +2567,9 @@ private fun ToggleLine(
                 Text(label, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Icon(Icons.Rounded.Info, contentDescription = help, tint = Muted, modifier = Modifier.padding(start = 6.dp).size(16.dp))
             }
-            Text(help, color = Muted, fontSize = 11.sp, lineHeight = 14.sp)
+            if (showHelpText) {
+                Text(help, color = Muted, fontSize = 11.sp, lineHeight = 14.sp)
+            }
         }
         Switch(
             checked = checked,
@@ -2511,12 +2629,15 @@ private fun StepLine(
     value: String,
     enabled: Boolean,
     onMinus: () -> Unit,
-    onPlus: () -> Unit
+    onPlus: () -> Unit,
+    showSubtitle: Boolean = true
 ) {
     Row(Modifier.fillMaxWidth().padding(top = 12.dp).alpha(if (enabled) 1f else 0.42f), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            Text(subtitle, color = Muted, fontSize = 11.sp, lineHeight = 14.sp)
+            if (showSubtitle) {
+                Text(subtitle, color = Muted, fontSize = 11.sp, lineHeight = 14.sp)
+            }
         }
         LensSmallButton("-", enabled, onMinus)
         Text(value, color = TextSecondary, fontSize = 14.sp, textAlign = TextAlign.Center, modifier = Modifier.width(64.dp))

@@ -7,6 +7,8 @@ import java.io.File
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
+import java.net.Inet4Address
+import java.net.NetworkInterface
 
 data class CoreResult(
     val ok: Boolean,
@@ -181,7 +183,10 @@ class LibboxCoreEngine : CoreEngine {
                 "IncludeAllNetworks", "includeAllNetworks" -> false
                 "ClearDNSCache", "clearDNSCache" -> null
                 "SendNotification", "sendNotification" -> null
-                "StartDefaultInterfaceMonitor", "startDefaultInterfaceMonitor" -> null
+                "StartDefaultInterfaceMonitor", "startDefaultInterfaceMonitor" -> {
+                    notifyDefaultInterface(args?.firstOrNull())
+                    null
+                }
                 "CloseDefaultInterfaceMonitor", "closeDefaultInterfaceMonitor" -> null
                 "FindConnectionOwner", "findConnectionOwner" -> method.returnType.newConnectionOwner()
                 "PackageNameByUid", "packageNameByUid" -> ""
@@ -189,12 +194,151 @@ class LibboxCoreEngine : CoreEngine {
                 "ReadWIFIState", "readWIFIState" -> null
                 "SystemCertificates", "systemCertificates" -> null
                 "LocalDNSTransport", "localDNSTransport" -> null
-                "GetInterfaces", "getInterfaces" -> null
+                "GetInterfaces", "getInterfaces" -> method.returnType.newNetworkInterfaceIterator()
                 "toString" -> "LibertaPlatformInterface"
                 else -> defaultValue(method.returnType)
             }
         }
+
+        private fun notifyDefaultInterface(listener: Any?) {
+            val selected = currentInterfaces().firstOrNull() ?: return
+            runCatching {
+                listener?.javaClass?.methods?.firstOrNull { method ->
+                    method.name == "updateDefaultInterface" && method.parameterTypes.size == 4
+                }?.invoke(
+                    listener,
+                    selected.name,
+                    selected.index,
+                    selected.interfaceType() == INTERFACE_TYPE_CELLULAR,
+                    false
+                )
+                Log.i("LibertaCore", "default interface=${selected.name} index=${selected.index}")
+            }.onFailure { error ->
+                Log.w("LibertaCore", "default interface notify failed: ${error.rootMessage()}")
+            }
+        }
+
+        private fun Class<*>.newNetworkInterfaceIterator(): Any {
+            val packageName = `package`?.name ?: return newNetworkInterfaceIterator(emptyList())
+            val interfaceClass = Class.forName("$packageName.NetworkInterface")
+            val interfaces = currentInterfaces()
+            val values = interfaces.mapNotNull { it.toLibboxInterface(packageName, interfaceClass) }
+            val names = interfaces.joinToString { "${it.name}/${it.index}/flags=${it.unixLinkFlags()}" }
+            Log.i("LibertaCore", "platform interfaces=${values.size} [$names]")
+            return newNetworkInterfaceIterator(values)
+        }
+
+        private fun Class<*>.newNetworkInterfaceIterator(values: List<Any>): Any =
+            Proxy.newProxyInstance(
+                classLoader,
+                arrayOf(this),
+                NetworkInterfaceIteratorInvocationHandler(values)
+            )
+
+        private fun NetworkInterface.toLibboxInterface(packageName: String, interfaceClass: Class<*>): Any? =
+            runCatching {
+                val target = interfaceClass.getDeclaredConstructor().newInstance()
+                val addresses = inetAddresses.toList()
+                    .filterIsInstance<Inet4Address>()
+                    .mapNotNull { address -> address.hostAddress?.let { "$it/32" } }
+                interfaceClass.findMethod("setName", parameterCount = 1)?.invoke(target, name)
+                interfaceClass.findMethod("setIndex", parameterCount = 1)?.invoke(target, index)
+                interfaceClass.findMethod("setMTU", parameterCount = 1)?.invoke(target, mtu)
+                interfaceClass.findMethod("setFlags", parameterCount = 1)?.invoke(target, unixLinkFlags())
+                interfaceClass.findMethod("setType", parameterCount = 1)?.invoke(target, interfaceType())
+                interfaceClass.findMethod("setMetered", parameterCount = 1)
+                    ?.invoke(target, interfaceType() == INTERFACE_TYPE_CELLULAR)
+                interfaceClass.findMethod("setAddresses", parameterCount = 1)?.invoke(
+                    target,
+                    Class.forName("$packageName.StringIterator").newStringIterator(addresses)
+                )
+                interfaceClass.findMethod("setDNSServer", parameterCount = 1)?.invoke(
+                    target,
+                    Class.forName("$packageName.StringIterator").newStringIterator(emptyList())
+                )
+                target
+            }.getOrElse { error ->
+                Log.w("LibertaCore", "skip interface $name: ${error.rootMessage()}")
+                null
+            }
+
+        private fun Class<*>.newStringIterator(values: List<String>): Any =
+            Proxy.newProxyInstance(
+                classLoader,
+                arrayOf(this),
+                StringIteratorInvocationHandler(values)
+            )
+
+        private fun currentInterfaces(): List<NetworkInterface> =
+            NetworkInterface.getNetworkInterfaces()
+                ?.toList()
+                .orEmpty()
+                .filter { it.isUp && !it.isLoopback && !it.name.startsWith("tun") }
+                .sortedWith(compareBy<NetworkInterface> { if (it.interfaceType() == INTERFACE_TYPE_CELLULAR) 0 else 1 }.thenBy { it.index })
+
+        private fun NetworkInterface.interfaceType(): Int =
+            when {
+                name.startsWith("wlan", ignoreCase = true) -> INTERFACE_TYPE_WIFI
+                name.startsWith("ccmni", ignoreCase = true) ||
+                    name.startsWith("rmnet", ignoreCase = true) ||
+                    name.startsWith("pdp", ignoreCase = true) ||
+                    name.startsWith("wwan", ignoreCase = true) -> INTERFACE_TYPE_CELLULAR
+                name.startsWith("eth", ignoreCase = true) -> INTERFACE_TYPE_ETHERNET
+                else -> INTERFACE_TYPE_OTHER
+            }
+
+        private fun NetworkInterface.unixLinkFlags(): Int {
+            var flags = IFF_UP or IFF_RUNNING
+            if (!isLoopback && !isPointToPoint) flags = flags or IFF_BROADCAST
+            if (isLoopback) flags = flags or IFF_LOOPBACK
+            if (isPointToPoint) flags = flags or IFF_POINTOPOINT
+            if (runCatching { supportsMulticast() }.getOrDefault(false)) flags = flags or IFF_MULTICAST
+            return flags
+        }
+
+        private companion object {
+            private const val INTERFACE_TYPE_WIFI = 0
+            private const val INTERFACE_TYPE_CELLULAR = 1
+            private const val INTERFACE_TYPE_ETHERNET = 2
+            private const val INTERFACE_TYPE_OTHER = 3
+
+            private const val IFF_UP = 0x1
+            private const val IFF_BROADCAST = 0x2
+            private const val IFF_LOOPBACK = 0x8
+            private const val IFF_POINTOPOINT = 0x10
+            private const val IFF_RUNNING = 0x40
+            private const val IFF_MULTICAST = 0x1000
+        }
     }
+}
+
+private class NetworkInterfaceIteratorInvocationHandler(
+    private val values: List<Any>
+) : InvocationHandler {
+    private var index = 0
+
+    override fun invoke(proxy: Any, method: Method, args: Array<out Any?>?): Any? =
+        when (method.name) {
+            "hasNext" -> index < values.size
+            "next" -> values[index++]
+            "toString" -> "LibertaNetworkInterfaceIterator(size=${values.size})"
+            else -> defaultValue(method.returnType)
+        }
+}
+
+private class StringIteratorInvocationHandler(
+    private val values: List<String>
+) : InvocationHandler {
+    private var index = 0
+
+    override fun invoke(proxy: Any, method: Method, args: Array<out Any?>?): Any? =
+        when (method.name) {
+            "hasNext" -> index < values.size
+            "len" -> values.size
+            "next" -> values[index++]
+            "toString" -> values.joinToString(prefix = "[", postfix = "]")
+            else -> defaultValue(method.returnType)
+        }
 }
 
 private fun Class<*>.findMethod(vararg names: String, parameterCount: Int): Method? =

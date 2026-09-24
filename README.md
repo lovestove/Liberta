@@ -9,10 +9,11 @@ Create a high-end, user-friendly, and completely free VPN application for Androi
 
 - **Kotlin + Jetpack Compose + MVVM shell**: Современная база на Android.
 - **VpnService foreground lifecycle**: Корректная работа в фоне.
-- **Adaptive Living UI**: Интерфейс с шейдерами, параллаксом и визуализацией трафика.
+- **Living Biome UI**: Зеленый природный интерфейс с прожилками, параллаксом и визуализацией трафика.
 - **VLESS parser & TCP server racing**: Оптимизация выбора серверов.
 - **libbox.aar integration**: Использование ядра sing-box через SagerNet gomobile.
-- **Phantom Call control-plane**: Мимикрия под WebRTC звонки для обхода блокировок.
+- **Phantom Call control-plane**: Мимикрия подключает сначала звонок и требует bridge для передачи VPN через звонок.
+- **Encrypted stego images**: GitHub workflow упаковывает подписки в зашифрованную PNG-картинку для загрузки на телефон.
 - **Sovereign Mesh**: Возможность работы в качестве relay-узла.
 - **GitHub release workflow**: Автоматическая сборка и публикация APK.
 

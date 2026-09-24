@@ -33,7 +33,7 @@ object VlessParser {
 
         val uuid = decodeUrl(authority.substring(0, atIndex))
         if (!UuidPattern.matches(uuid)) return null
-        val hostPort = authority.substring(atIndex + 1)
+        val hostPort = authority.substring(atIndex + 1).trimEnd('/')
         val host: String
         val port: Int
         if (hostPort.startsWith("[")) {
@@ -57,15 +57,18 @@ object VlessParser {
             host = host,
             port = port,
             name = name,
-            transport = params["type"]?.ifBlank { "tcp" } ?: "tcp",
-            security = params["security"]?.ifBlank { "none" } ?: "none",
-            flow = params["flow"],
-            fingerprint = params["fp"],
-            sni = params["sni"],
-            publicKey = params["pbk"],
-            shortId = params["sid"],
-            path = params["path"] ?: params["spx"],
-            serviceName = params["serviceName"]
+            transport = params.value("type")?.ifBlank { "tcp" } ?: "tcp",
+            security = params.value("security")?.ifBlank { "none" } ?: "none",
+            flow = params.value("flow"),
+            fingerprint = params.value("fp"),
+            sni = params.value("sni"),
+            alpn = params.value("alpn").toAlpnList(),
+            allowInsecure = params.booleanValue("allowInsecure", "insecure"),
+            publicKey = params.value("pbk"),
+            shortId = params.value("sid"),
+            path = params.value("path") ?: params.value("spx"),
+            hostHeader = params.value("host"),
+            serviceName = params.value("serviceName", "servicename")
         )
     }
 
@@ -100,6 +103,26 @@ object VlessParser {
 
     private fun decodeUrl(value: String): String =
         runCatching { URLDecoder.decode(value, StandardCharsets.UTF_8.name()) }.getOrDefault(value)
+
+    private fun Map<String, String>.value(vararg keys: String): String? {
+        keys.forEach { key -> this[key]?.let { return it } }
+        keys.forEach { key ->
+            entries.firstOrNull { it.key.equals(key, ignoreCase = true) }?.value?.let { return it }
+        }
+        return null
+    }
+
+    private fun Map<String, String>.booleanValue(vararg keys: String): Boolean =
+        value(*keys)?.let { value ->
+            value.equals("true", ignoreCase = true) || value == "1" || value.equals("yes", ignoreCase = true)
+        } ?: false
+
+    private fun String?.toAlpnList(): List<String> =
+        this
+            ?.split(",", "|")
+            ?.map { it.trim() }
+            ?.filter { it.isNotBlank() }
+            .orEmpty()
 
     private fun stableId(value: String): String {
         val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(StandardCharsets.UTF_8))

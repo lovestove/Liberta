@@ -185,9 +185,12 @@ data class ServerCandidate(
     val flow: String? = null,
     val fingerprint: String? = null,
     val sni: String? = null,
+    val alpn: List<String> = emptyList(),
+    val allowInsecure: Boolean = false,
     val publicKey: String? = null,
     val shortId: String? = null,
     val path: String? = null,
+    val hostHeader: String? = null,
     val serviceName: String? = null,
     val latencyMs: Long? = null
 ) {
